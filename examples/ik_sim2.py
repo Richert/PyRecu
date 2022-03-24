@@ -1,40 +1,38 @@
 import numpy as np
-from pyrecu import ik2_ata, RNN
+from pyrecu import ik_ata, RNN
 import matplotlib.pyplot as plt
 
 # define parameters
 ###################
 
 N = 10000
-C = 15.2   # unit: pF
-k = 1.0  # unit: None
-v_r = -80.0  # unit: mV
-v_t = -30.0  # unit: mV
+tau = 1.0
+alpha = 0.6215
+eta = 0.1
+Delta = 0.02
 v_spike = 500.0  # unit: mV
 v_reset = -500.0  # unit: mV
-v_delta = 1.0  # unit: mV
-d = 9.0
-a = 0.03
-b = -20.0
-tau_s = 5.0
-J = -0.5
-g = 5.0
-g_e = 6.0
-e_r = -60.0
+d = 0.02
+a = 0.0077
+b = -0.01
+tau_s = 2.6
+J = 1.2308
+g = 2.6
+e_r = 1.0
 
 # define lorentzian of etas
-spike_thresholds = v_t+v_delta*np.tan((np.pi/2)*(2.*np.arange(1, N+1)-N-1)/(N+1))
+etas = eta+Delta*np.tan((np.pi/2)*(2.*np.arange(1, N+1)-N-1)/(N+1))
 
 # define inputs
 T = 80.0
 dt = 1e-4
 dts = 1e-2
 inp = np.zeros((int(T/dt),))
-inp[int(20/dt):int(40/dt)] = 600.0
+inp[int(20/dt):int(40/dt)] = 0.5
 
 # perform simulation
-model = RNN(N, 3*N, ik2_ata, C=C, k=k, v_r=v_r, v_t=spike_thresholds, v_spike=v_spike, v_reset=v_reset, d=d, a=a, b=b,
-            tau_s=tau_s, J=J, g=g, e_r=e_r, g_e=g_e)
+model = RNN(N, 3*N, ik_ata, tau=tau, eta=etas, alpha=alpha, v_spike=v_spike, v_reset=v_reset, d=d, a=a, b=b,
+            tau_s=tau_s, J=J, g=g, e_r=e_r)
 res = model.run(T=T, dt=dt, dts=dts, outputs=(np.arange(3*N, 4*N),), inp=inp, cutoff=10.0)[0]
 
 # plot results
