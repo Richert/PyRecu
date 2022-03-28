@@ -33,8 +33,7 @@ class RNN:
         state_buffers = [np.zeros((len(out), sampling_steps)) for out in outputs]
 
         # retrieve recording variables
-        sample = 0
-        rhs_func, u, args, kwargs, results = self.net_update, self.u, self.func_args, self.func_kwargs, \
+        ufunc, u, args, kwargs, results = self.net_update, self.u, self.func_args, self.func_kwargs, \
             self.state_records
 
         # define input projection function
@@ -49,8 +48,27 @@ class RNN:
             get_input = self._project_input
 
         # integrate the system equations
+        results = self._run(steps=steps, sampling_steps=sampling_steps, start_step=start_step, outputs=outputs,
+                            state_buffers=state_buffers, results=results, ufunc=ufunc, u=u, N=self.N,
+                            get_input=get_input, in_args=in_args, args=args, kwargs=kwargs)
+
+        if verbose:
+            print('Finished simulation. The state recordings are available under `state_records`.')
+        return results
+
+    @staticmethod
+    def _run(steps: int, sampling_steps: int, start_step: int, outputs: tuple, state_buffers: list, results: list,
+             ufunc: tp.Callable, u: np.ndarray, N: int, get_input: tp.Callable, in_args: tuple, args: tuple,
+             kwargs: dict):
+
+        sample = 0
+
         for step in range(steps):
-            u = rhs_func(u, self.N, get_input(step, *in_args), *args, **kwargs)
+
+            # call user-supplied update function
+            u = ufunc(u, N, get_input(step, *in_args), *args, **kwargs)
+
+            # store current network state
             buffer_step = step % sampling_steps
             store_results = step > start_step and buffer_step == 0
             for i, (out, buffer) in enumerate(zip(outputs, state_buffers)):
@@ -60,12 +78,10 @@ class RNN:
             if store_results:
                 sample += 1
 
-        if verbose:
-            print('Finished simulation. The state recordings are available under `state_records`.')
         return results
 
     @staticmethod
-    @njit
+    @njit(parallel=True)
     def _project_input(idx: int, inp: np.ndarray, w: np.ndarray, *args):
         return w @ inp[:, idx]
 

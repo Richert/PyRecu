@@ -1,6 +1,9 @@
+import numba as nb
+nb.config.THREADING_LAYER = 'tbb'
 import numpy as np
 from pyrecu import ik2_ata, RNN
 import matplotlib.pyplot as plt
+
 
 # define parameters
 ###################
@@ -10,15 +13,15 @@ C = 15.2   # unit: pF
 k = 1.0  # unit: None
 v_r = -80.0  # unit: mV
 v_t = -30.0  # unit: mV
-v_spike = 500.0  # unit: mV
-v_reset = -500.0  # unit: mV
+v_spike = 200.0  # unit: mV
+v_reset = -1000.0  # unit: mV
 v_delta = 1.0  # unit: mV
 d = 9.0
 a = 0.03
 b = -20.0
 tau_s = 5.0
-J = -0.5
-g = 5.0
+J = 1.0
+g = 8.0
 g_e = 6.0
 e_r = -60.0
 
@@ -26,11 +29,11 @@ e_r = -60.0
 spike_thresholds = v_t+v_delta*np.tan((np.pi/2)*(2.*np.arange(1, N+1)-N-1)/(N+1))
 
 # define inputs
-T = 80.0
+T = 1100.0
 dt = 1e-4
 dts = 1e-2
-inp = np.zeros((int(T/dt),))
-inp[int(20/dt):int(40/dt)] = 600.0
+inp = np.zeros((int(T/dt),)) + 200.0
+inp[int(30/dt):int(50/dt)] += 100.0
 
 # perform simulation
 model = RNN(N, 3*N, ik2_ata, C=C, k=k, v_r=v_r, v_t=spike_thresholds, v_spike=v_spike, v_reset=v_reset, d=d, a=a, b=b,
