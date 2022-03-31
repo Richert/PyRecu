@@ -1,8 +1,6 @@
 import numpy as np
-from numba import njit
 
 
-@njit
 def ik(u: np.ndarray, N: int, inp: np.ndarray, C: np.ndarray, etas: np.ndarray, J: float, tau: float, alpha: float,
        e_r: float, tau_s: float, b: float, tau_a: float, k: float, v_th: float, dt: float = 1e-4) -> np.ndarray:
     """Calculates right-hand side update of a network of all-to-all coupled QIF neurons with heterogeneous
@@ -35,7 +33,6 @@ def ik(u: np.ndarray, N: int, inp: np.ndarray, C: np.ndarray, etas: np.ndarray, 
     return u
 
 
-@njit(parallel=True)
 def ik_ata(y: np.ndarray, N: int, inp: np.ndarray, eta: np.ndarray, J: float, g: float, tau: float, alpha: float,
            e_r: float, tau_s: float, b: float, a: float, d: float, v_spike: float, v_reset: float, dt: float = 1e-4
            ) -> np.ndarray:
@@ -50,13 +47,13 @@ def ik_ata(y: np.ndarray, N: int, inp: np.ndarray, eta: np.ndarray, J: float, g:
     rates = spikes / dt
 
     # calculate state vector updates
-    v += dt * (v**2 - alpha*v + eta + inp + g*s*tau*(e_r - v) - u)/tau
-    u += dt * (a*(b*v - u))
-    s += dt * (np.mean(rates)*J - s/tau_s)
+    v = v + dt * (v**2 - alpha*v + eta + inp + g*s*tau*(e_r - v) - u)/tau
+    u = u + dt * (a*(b*v - u))
+    s = s + dt * (np.mean(rates)*J - s/tau_s)
 
     # reset membrane potential
     v[spikes] = v_reset
-    u[spikes] += d
+    u[spikes] = u[spikes] + d
 
     # store updated state variables
     y[:N] = v
@@ -69,7 +66,6 @@ def ik_ata(y: np.ndarray, N: int, inp: np.ndarray, eta: np.ndarray, J: float, g:
     return y
 
 
-@njit
 def ik2(y: np.ndarray, N: int, inp: np.ndarray, W: np.ndarray, v_r: float, v_t: np.ndarray, k: float, e_r: float,
         C: float, J: float, tau_s: float, b: float, a: float, d: float, v_spike: float, v_reset: float,
         dt: float = 1e-4) -> np.ndarray:
@@ -104,7 +100,6 @@ def ik2(y: np.ndarray, N: int, inp: np.ndarray, W: np.ndarray, v_r: float, v_t: 
     return y
 
 
-@njit
 def ik2_ata(y: np.ndarray, N: int, inp: np.ndarray, v_r: float, v_t: np.ndarray, k: float, e_r: float, C: float,
             J: float, g: float, tau_s: float, b: float, a: float, d: float, v_spike: float, v_reset: float,
             g_e: float, dt: float = 1e-4) -> np.ndarray:

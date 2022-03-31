@@ -1,5 +1,5 @@
 import numpy as np
-from numba import njit
+from numba import njit, prange, types, typed
 import typing as tp
 
 
@@ -16,11 +16,9 @@ class RNN:
         self.func_args = args
         self.state_records = []
 
-    def run(self, T: float, dt: float, dts: float, outputs: tuple = None, inp: tp.Optional[np.ndarray] = None,
-            W_in: np.ndarray = None, t_init: float = 0.0, cutoff: float = 0.0, verbose: bool = False):
-
-        if not outputs:
-            outputs = (np.arange(0, len(self.u)),)
+    def run(self, T: float, dt: float, dts: float, outputs: dict, inp: tp.Optional[np.ndarray] = None,
+            W_in: np.ndarray = None, t_init: float = 0.0, cutoff: float = 0.0, verbose: bool = False,
+            decorator: tp.Callable = njit, **decorator_kwargs):
 
         # initializations
         steps = int(np.round(T / dt))
@@ -29,12 +27,26 @@ class RNN:
         start_step = steps - store_steps * sampling_steps
         self.t += t_init
         self.func_kwargs['dt'] = dt
-        self.state_records = [np.zeros((store_steps, len(out))) for out in outputs]
-        state_buffers = [np.zeros((len(out), sampling_steps)) for out in outputs]
+        self.state_records = dict()
 
-        # retrieve recording variables
-        ufunc, u, args, kwargs, results = self.net_update, self.u, self.func_args, self.func_kwargs, \
-            self.state_records
+        # define recording variables
+        results = typed.Dict.empty(key_type=types.string, value_type=types.float64[:, :])
+        state_buffers = typed.Dict.empty(key_type=types.string, value_type=types.float64[:, :])
+        avgs = typed.Dict.empty(key_type=types.string, value_type=types.boolean)
+        indices = typed.Dict.empty(key_type=types.string, value_type=types.int32[:])
+        for key, out in outputs.items():
+            if out["avg"]:
+                x = np.zeros((store_steps, 1))
+                x_buffer = np.zeros((1, sampling_steps))
+            else:
+                n_x = len(out['idx'])
+                x = np.zeros((store_steps, n_x))
+                x_buffer = np.zeros((n_x, sampling_steps))
+            self.state_records[key] = x
+            results[key] = x
+            state_buffers[key] = x_buffer
+            avgs[key] = out["avg"]
+            indices[key] = out["idx"]
 
         # define input projection function
         if inp is None:
@@ -47,45 +59,67 @@ class RNN:
             in_args = (inp, W_in)
             get_input = self._project_input
 
+        # apply function decorators
+        infunc = decorator(get_input, **decorator_kwargs)
+        ufunc = decorator(self.net_update, **decorator_kwargs)
+        recfunc = decorator(self._record_njit if decorator == njit else self._record, **decorator_kwargs)
+
+        # retrieve remaining simulation variables from object
+        u, args, kwargs, N = self.u, self.func_args, self.func_kwargs, self.N
+
         # integrate the system equations
-        results = self._run(steps=steps, sampling_steps=sampling_steps, start_step=start_step, outputs=outputs,
-                            state_buffers=state_buffers, results=results, ufunc=ufunc, u=u, N=self.N,
-                            get_input=get_input, in_args=in_args, args=args, kwargs=kwargs)
-
-        if verbose:
-            print('Finished simulation. The state recordings are available under `state_records`.')
-        return results
-
-    @staticmethod
-    def _run(steps: int, sampling_steps: int, start_step: int, outputs: tuple, state_buffers: list, results: list,
-             ufunc: tp.Callable, u: np.ndarray, N: int, get_input: tp.Callable, in_args: tuple, args: tuple,
-             kwargs: dict):
-
         sample = 0
-
         for step in range(steps):
 
             # call user-supplied update function
-            u = ufunc(u, N, get_input(step, *in_args), *args, **kwargs)
+            u = ufunc(u, N, infunc(step, *in_args), *args, **kwargs)
 
-            # store current network state
-            buffer_step = step % sampling_steps
-            store_results = step > start_step and buffer_step == 0
-            for i, (out, buffer) in enumerate(zip(outputs, state_buffers)):
-                buffer[:, buffer_step] = u[out]
-                if store_results:
-                    results[i][sample, :] = np.mean(buffer, axis=1)
-            if store_results:
-                sample += 1
+            # record states
+            sample = recfunc(u, results, state_buffers, avgs, indices, sample, step, sampling_steps, start_step)
 
-        return results
+        if verbose:
+            print('Finished simulation. The state recordings are available under `state_records`.')
+        return self.state_records
 
     @staticmethod
-    @njit(parallel=True)
     def _project_input(idx: int, inp: np.ndarray, w: np.ndarray, *args):
         return w @ inp[:, idx]
 
     @staticmethod
-    @njit
     def _get_input(idx: int, inp: np.ndarray, *args):
         return inp[idx]
+
+    @staticmethod
+    def _record_njit(u: np.ndarray, results: typed.Dict, state_buffers: typed.Dict, average: typed.Dict,
+                     indices: typed.Dict, sample: int, step: int, sampling_steps: int, start_step: int) -> int:
+        buffer_step = step % sampling_steps
+        store_results = step > start_step and buffer_step == 0
+        for key in results:
+            res, buffer, avg, idx = results[key], state_buffers[key], average[key], indices[key]
+            if avg:
+                buffer[0, buffer_step] = np.mean(u[idx])
+            else:
+                buffer[:, buffer_step] = u[idx]
+            if store_results:
+                for i in prange(res.shape[1]):
+                    res[sample, i] = buffer[i].mean()
+        if store_results:
+            sample += 1
+        return sample
+
+    @staticmethod
+    def _record(u: np.ndarray, results: typed.Dict, state_buffers: typed.Dict, average: typed.Dict, indices: typed.Dict,
+                sample: int, step: int, sampling_steps: int, start_step: int) -> int:
+        buffer_step = step % sampling_steps
+        store_results = step > start_step and buffer_step == 0
+        for key in results:
+            res, buffer, avg, idx = results[key], state_buffers[key], average[key], indices[key]
+            if avg:
+                buffer[0, buffer_step] = np.mean(u[idx])
+            else:
+                buffer[:, buffer_step] = u[idx]
+            if store_results:
+                res[sample, :] = np.mean(buffer, 1)
+        if store_results:
+            sample += 1
+        return sample
