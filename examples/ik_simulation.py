@@ -4,12 +4,13 @@ import numpy as np
 from pyrecu import ik2_ata, RNN
 import matplotlib.pyplot as plt
 from time import perf_counter
+import pickle
 plt.rcParams['backend'] = 'TkAgg'
 
 # define parameters
 ###################
 
-N = 50000
+N = 10000
 C = 100.0   # unit: pF
 k = 0.7  # unit: None
 v_r = -60.0  # unit: mV
@@ -33,8 +34,8 @@ spike_thresholds = v_t+v_delta*np.tan((np.pi/2)*(2.*np.arange(1, N+1)-N-1)/(N+1)
 T = 2100.0
 dt = 1e-4
 dts = 1e-2
-inp = np.zeros((int(T/dt),)) + 60.0
-inp[int(600/dt):int(1600/dt)] -= 15.0
+inp = np.zeros((int(T/dt),)) + 75.0
+inp[int(600/dt):int(1600/dt)] -= 30.0
 
 # perform simulation
 u_init = np.zeros((4*N,))
