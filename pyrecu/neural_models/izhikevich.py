@@ -35,7 +35,7 @@ def ik(u: np.ndarray, N: int, inp: np.ndarray, C: np.ndarray, etas: np.ndarray, 
     return u
 
 
-@njit
+@njit(parallel=True)
 def ik_ata(y: np.ndarray, N: int, inp: np.ndarray, eta: np.ndarray, J: float, g: float, tau: float, alpha: float,
            e_r: float, tau_s: float, b: float, a: float, d: float, v_spike: float, v_reset: float, dt: float = 1e-4
            ) -> np.ndarray:
@@ -104,7 +104,7 @@ def ik2(y: np.ndarray, N: int, inp: np.ndarray, W: np.ndarray, v_r: float, v_t: 
     return y
 
 
-@njit(parallel=True)
+@njit
 def ik2_ata(y: np.ndarray, N: int, inp: np.ndarray, v_r: float, v_t: np.ndarray, k: float, e_r: float, C: float,
             J: float, g: float, tau_s: float, b: float, a: float, d: float, v_spike: float, v_reset: float,
             g_e: float, dt: float = 1e-4) -> np.ndarray:
