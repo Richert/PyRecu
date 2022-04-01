@@ -1,7 +1,9 @@
+import sys
+
 import numpy as np
 from numba import njit, prange, types, typed
 import typing as tp
-
+from time import perf_counter
 
 class RNN:
 
@@ -24,7 +26,6 @@ class RNN:
         self.net_update = evolution_func
         self.func_kwargs = kwargs
         self.func_args = args
-        self.state_records = []
 
     def run(self, T: float, dt: float, dts: float, outputs: dict, inp: tp.Optional[np.ndarray] = None,
             W_in: np.ndarray = None, t_init: float = 0.0, cutoff: float = 0.0, verbose: bool = False,
@@ -58,26 +59,22 @@ class RNN:
         start_step = steps - store_steps * sampling_steps
         self.t += t_init
         self.func_kwargs['dt'] = dt
-        self.state_records = dict()
 
         # define recording variables
-        results = typed.Dict.empty(key_type=types.string, value_type=types.float64[:, :])
-        state_buffers = typed.Dict.empty(key_type=types.string, value_type=types.float64[:, :])
-        avgs = typed.Dict.empty(key_type=types.string, value_type=types.boolean)
-        indices = typed.Dict.empty(key_type=types.string, value_type=types.int32[:])
+        state_records, state_buffers, state_averaging, state_indices, keys = [], [], [], [], []
         for key, out in outputs.items():
             if out["avg"]:
-                x = np.zeros((store_steps, 1), np.float64)
-                x_buffer = np.zeros((1, sampling_steps), dtype=np.float64)
+                x = np.zeros((store_steps, 1))
+                x_buffer = np.zeros((1, sampling_steps))
             else:
                 n_x = len(out['idx'])
-                x = np.zeros((store_steps, n_x), np.float64)
-                x_buffer = np.zeros((n_x, sampling_steps), np.float64)
-            self.state_records[key] = x
-            results[key] = x
-            state_buffers[key] = x_buffer
-            avgs[key] = out["avg"]
-            indices[key] = np.asarray(out["idx"], dtype=np.int32)
+                x = np.zeros((store_steps, n_x))
+                x_buffer = np.zeros((n_x, sampling_steps))
+            state_records.append(x)
+            state_buffers.append(x_buffer)
+            state_averaging.append(out["avg"])
+            state_indices.append(np.asarray(out["idx"]))
+            keys.append(key)
 
         # define input projection function
         if inp is None:
@@ -91,26 +88,44 @@ class RNN:
             get_input = self._project_input
 
         # apply function decorators
-        infunc = decorator(get_input, **decorator_kwargs)
+        if decorator is None:
+            decorator = lambda f, **kw: f
         ufunc = decorator(self.net_update, **decorator_kwargs)
         recfunc = decorator(self._record_njit if decorator == njit else self._record, **decorator_kwargs)
+        if get_input == self._get_input and 'parallel' in decorator_kwargs:
+            decorator_kwargs.pop('parallel')
+        infunc = decorator(get_input, **decorator_kwargs)
 
-        # retrieve remaining simulation variables from object
+        # retrieve simulation variables from object and dicts
         u, args, kwargs, N = self.u, self.func_args, self.func_kwargs, self.N
+        recs, buffs, avgs, idxs = tuple(state_records), tuple(state_buffers), tuple(state_averaging), \
+                                  tuple(state_indices)
 
-        # integrate the system equations
+        # final simulation variable initializations
+        disp_interval = sampling_steps * 10
         sample = 0
+
+        # start simulation
+        if verbose:
+            print('Starting simulation.')
+        t0 = perf_counter()
         for step in range(steps):
 
             # call user-supplied update function
             u = ufunc(u, N, infunc(step, *in_args), *args, **kwargs)
 
             # record states
-            sample = recfunc(u, results, state_buffers, avgs, indices, sample, step, sampling_steps, start_step)
+            sample = recfunc(u, recs, buffs, avgs, idxs, sample, step, sampling_steps, start_step)
 
+            # print simulation progress
+            if verbose and step % disp_interval == 0:
+                print(f'\r    Simulation progress: {step*100/steps} %', end='', file=sys.stdout)
+
+        # finish things up
+        t1 = perf_counter()
         if verbose:
-            print('Finished simulation. The state recordings are available under `state_records`.')
-        return self.state_records
+            print(f'Finished simulation after {t1 - t0} s.')
+        return {key: res for key, res in zip(keys, state_records)}
 
     @staticmethod
     def _project_input(idx: int, inp: np.ndarray, w: np.ndarray):
@@ -121,12 +136,27 @@ class RNN:
         return inp[idx]
 
     @staticmethod
-    def _record_njit(u: np.ndarray, results: typed.Dict, state_buffers: typed.Dict, average: typed.Dict,
-                     indices: typed.Dict, sample: int, step: int, sampling_steps: int, start_step: int) -> int:
+    def _record(u: np.ndarray, results: tuple, state_buffers: tuple, average: tuple, indices: tuple, sample: int,
+                step: int, sampling_steps: int, start_step: int) -> int:
         buffer_step = step % sampling_steps
         store_results = step > start_step and buffer_step == 0
-        for key in results:
-            res, buffer, avg, idx = results[key], state_buffers[key], average[key], indices[key]
+        for res, buffer, avg, idx in zip(results, state_buffers, average, indices):
+            if avg:
+                buffer[0, buffer_step] = np.mean(u[idx])
+            else:
+                buffer[:, buffer_step] = u[idx]
+            if store_results:
+                res[sample, :] = np.mean(buffer, 1)
+        if store_results:
+            sample += 1
+        return sample
+
+    @staticmethod
+    def _record_njit(u: np.ndarray, results: tuple, state_buffers: tuple, average: tuple, indices: tuple, sample: int,
+                     step: int, sampling_steps: int, start_step: int) -> int:
+        buffer_step = step % sampling_steps
+        store_results = step > start_step and buffer_step == 0
+        for res, buffer, avg, idx in zip(results, state_buffers, average, indices):
             if avg:
                 buffer[0, buffer_step] = np.mean(u[idx])
             else:
@@ -134,23 +164,6 @@ class RNN:
             if store_results:
                 for i in prange(res.shape[1]):
                     res[sample, i] = buffer[i].mean()
-        if store_results:
-            sample += 1
-        return sample
-
-    @staticmethod
-    def _record(u: np.ndarray, results: typed.Dict, state_buffers: typed.Dict, average: typed.Dict, indices: typed.Dict,
-                sample: int, step: int, sampling_steps: int, start_step: int) -> int:
-        buffer_step = step % sampling_steps
-        store_results = step > start_step and buffer_step == 0
-        for key in results:
-            res, buffer, avg, idx = results[key], state_buffers[key], average[key], indices[key]
-            if avg:
-                buffer[0, buffer_step] = np.mean(u[idx])
-            else:
-                buffer[:, buffer_step] = u[idx]
-            if store_results:
-                res[sample, :] = np.mean(buffer, 1)
         if store_results:
             sample += 1
         return sample
