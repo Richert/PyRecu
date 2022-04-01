@@ -1,7 +1,8 @@
 import numba as nb
 nb.config.THREADING_LAYER = 'omp'
 import numpy as np
-from pyrecu import ik2_ata, RNN
+from pyrecu import RNN
+from pyrecu.neural_models import ik_ata
 import matplotlib.pyplot as plt
 from time import perf_counter
 import pickle
@@ -10,7 +11,7 @@ plt.rcParams['backend'] = 'TkAgg'
 # define parameters
 ###################
 
-N = 1000
+N = 10000
 C = 100.0   # unit: pF
 k = 0.7  # unit: None
 v_r = -60.0  # unit: mV
@@ -31,16 +32,16 @@ e_r = 0.0
 spike_thresholds = v_t+v_delta*np.tan((np.pi/2)*(2.*np.arange(1, N+1)-N-1)/(N+1))
 
 # define inputs
-T = 210.0
+T = 2100.0
 dt = 1e-4
 dts = 1e-2
-inp = np.zeros((int(T/dt),)) + 75.0
-inp[int(600/dt):int(1600/dt)] -= 30.0
+inp = np.zeros((int(T/dt),)) + 60.0
+inp[int(600/dt):int(1600/dt)] -= 15.0
 
-# initialze model
-u_init = np.zeros((4*N,))
-u_init[0:N] -= 60.0
-model = RNN(N, 3*N, ik2_ata, C=C, k=k, v_r=v_r, v_t=spike_thresholds, v_spike=v_spike, v_reset=v_reset, d=d, a=a, b=b,
+# initialize model
+u_init = np.zeros((3*N,))
+u_init[:N] -= 60.0
+model = RNN(N, 3*N, ik_ata, C=C, k=k, v_r=v_r, v_t=spike_thresholds, v_spike=v_spike, v_reset=v_reset, d=d, a=a, b=b,
             tau_s=tau_s, J=J, g=g, e_r=e_r, g_e=g_e, u_init=u_init)
 
 # define outputs
