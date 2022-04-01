@@ -28,7 +28,7 @@ class RNN:
         self.func_args = args
 
     def run(self, T: float, dt: float, dts: float, outputs: dict, inp: tp.Optional[np.ndarray] = None,
-            W_in: np.ndarray = None, t_init: float = 0.0, cutoff: float = 0.0, verbose: bool = False,
+            W_in: np.ndarray = None, t_init: float = 0.0, cutoff: float = 0.0, verbose: bool = True,
             decorator: tp.Callable = njit, **decorator_kwargs) -> dict:
         """Solve the initial value problem for the network.
 
@@ -124,6 +124,7 @@ class RNN:
         # finish things up
         t1 = perf_counter()
         if verbose:
+            print('')
             print(f'Finished simulation after {t1 - t0} s.')
         return {key: res for key, res in zip(keys, state_records)}
 
@@ -158,12 +159,12 @@ class RNN:
         store_results = step > start_step and buffer_step == 0
         for res, buffer, avg, idx in zip(results, state_buffers, average, indices):
             if avg:
-                buffer[0, buffer_step] = np.mean(u[idx])
+                buffer[0, buffer_step] = u[idx].mean()
             else:
                 buffer[:, buffer_step] = u[idx]
             if store_results:
-                for i in prange(res.shape[1]):
-                    res[sample, i] = buffer[i].mean()
+                for i in prange(buffer.shape[0]):
+                    res[sample, i] = buffer[i, :].mean()
         if store_results:
             sample += 1
         return sample
