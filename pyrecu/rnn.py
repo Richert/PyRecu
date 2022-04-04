@@ -121,11 +121,16 @@ class RNN:
             if verbose and step % disp_interval == 0:
                 print(f'\r    Simulation progress: {step*100/steps} %', end='', file=sys.stdout)
 
-        # finish things up
+        # final recording step
+        if sample < store_steps:
+            recfunc(u, recs, buffs, avgs, idxs, sample, sampling_steps, sampling_steps, 0)
+
+        # summarize simulation process
         t1 = perf_counter()
         if verbose:
             print('')
             print(f'Finished simulation after {t1 - t0} s.')
+
         return {key: res for key, res in zip(keys, state_records)}
 
     @staticmethod
