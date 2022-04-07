@@ -27,9 +27,9 @@ class RNN:
         self.func_kwargs = kwargs
         self.func_args = args
 
-    def run(self, T: float, dt: float, dts: float, outputs: dict, inp: tp.Optional[np.ndarray] = None,
-            W_in: np.ndarray = None, t_init: float = 0.0, cutoff: float = 0.0, verbose: bool = True,
-            decorator: tp.Callable = njit, **decorator_kwargs) -> dict:
+    def run(self, T: float, dt: float, dts: float, outputs: dict, inp: np.ndarray = None, W_in: np.ndarray = None,
+            t_init: float = 0.0, cutoff: float = 0.0, verbose: bool = True, decorator: tp.Optional[tp.Callable] = njit,
+            **decorator_kwargs) -> dict:
         """Solve the initial value problem for the network.
 
         :param T: Upper time integration limit of the initial value problem.
