@@ -207,5 +207,5 @@ def ik_ei_ata(y: np.ndarray, N: int, inp: np.ndarray, ve_r: float, vi_r: float, 
     y[m] = se_new
     y[m+1] = si_new
     y[m+2] = rates_e
-    y[m*3] = rates_i
+    y[m+3] = rates_i
     return y
