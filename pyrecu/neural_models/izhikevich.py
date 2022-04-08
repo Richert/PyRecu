@@ -158,16 +158,16 @@ def ik_ei_ata(y: np.ndarray, N: int, inp: np.ndarray, ve_r: float, vi_r: float, 
     # extract state variables from u
     m = 4*N
     ve, ue, vi, ui = y[:N], y[N:2*N], y[2*N:3*N], y[3*N:m]
-    se, si = y[m], y[m+1]
+    se, si, re, ri = y[m], y[m+1], y[m+2], y[m+3]
 
     # extract inputs
     inp_e, inp_i = inp[0], inp[1]
 
     # calculate network firing rates
     spikes_e = ve >= ve_spike
-    rates_e = spikes_e / dt
+    rates_e = np.mean(spikes_e / dt)
     spikes_i = vi >= vi_spike
-    rates_i = spikes_i / dt
+    rates_i = np.mean(spikes_i / dt)
 
     # calculate vector field of the system
     ######################################
@@ -175,12 +175,12 @@ def ik_ei_ata(y: np.ndarray, N: int, inp: np.ndarray, ve_r: float, vi_r: float, 
     # excitatory population
     d_ve = (ke*(ve**2 - (ve_r+ve_t)*ve + ve_r*ve_t) + inp_e + k_ee*g_ampa*se*(E_ampa-ve) + k_ie*g_gaba*si*(E_gaba-ve) - ue)/Ce
     d_ue = ae*(be*(ve-ve_r) - ue)
-    d_se = rates_e.mean() - se/tau_ampa
+    d_se = rates_e - se/tau_ampa
 
     # inhibitory population
     d_vi = (ki * (vi**2 - (vi_r+vi_t)*vi + vi_r*vi_t) + inp_i + k_ei*g_ampa*se*(E_ampa-vi) + k_ii*g_gaba*si*(E_gaba-vi) - ui) / Ci
     d_ui = ai * (bi*(vi-vi_r) - ui)
-    d_si = rates_i.mean() - si/tau_gaba
+    d_si = rates_i - si/tau_gaba
 
     # update state variables
     ########################
@@ -206,4 +206,6 @@ def ik_ei_ata(y: np.ndarray, N: int, inp: np.ndarray, ve_r: float, vi_r: float, 
     y[3*N:m] = ui_new
     y[m] = se_new
     y[m+1] = si_new
+    y[m+2] = rates_e
+    y[m*3] = rates_i
     return y
