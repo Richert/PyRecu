@@ -114,15 +114,14 @@ def ik_ata(y: np.ndarray, N: int, inp: np.ndarray, v_r: float, v_t: np.ndarray, 
      with heterogeneous background excitabilities."""
 
     # extract state variables from u
-    v, u, s = y[:N], y[N:2*N], y[2*N:]
+    v, u, s = y[:N], y[N:2*N], y[2*N]
 
     # calculate network input
     spikes = v >= v_spike
-    rates = spikes / dt
-    s_in = s.mean()
+    rates = np.mean(spikes / dt)
 
     # calculate vector field of the system
-    dv = (k*(v**2 - (v_r+v_t)*v + v_r*v_t) + inp + g*s_in*(E_r - v) + q*(np.mean(v)-v) - u)/C
+    dv = (k*(v**2 - (v_r+v_t)*v + v_r*v_t) + inp + g*s*(E_r - v) + q*(np.mean(v)-v) - u)/C
     du = a*(b*(v-v_r) - u)
     ds = J*rates - s/tau_s
 
@@ -138,7 +137,8 @@ def ik_ata(y: np.ndarray, N: int, inp: np.ndarray, v_r: float, v_t: np.ndarray, 
     # store updated state variables
     y[:N] = v_new
     y[N:2*N] = u_new
-    y[2*N:] = s_new
+    y[2*N] = s_new
+    y[2*N+1] = rates
 
     return y
 
