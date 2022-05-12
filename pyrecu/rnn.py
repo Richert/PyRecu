@@ -29,7 +29,7 @@ class RNN:
 
     def run(self, T: float, dt: float, dts: float, outputs: dict, inp: np.ndarray = None, W_in: np.ndarray = None,
             t_init: float = 0.0, cutoff: float = 0.0, verbose: bool = True, decorator: tp.Optional[tp.Callable] = njit,
-            **decorator_kwargs) -> dict:
+            disp_interval: float = None, **decorator_kwargs) -> dict:
         """Solve the initial value problem for the network.
 
         :param T: Upper time integration limit of the initial value problem.
@@ -47,6 +47,7 @@ class RNN:
         :param verbose: If true, updates about the simulation status will be displayed.
         :param decorator: Decorator function that will be applied to the `evolution_func` and other `RNN` intrinsic
             functions that will be called multiple times throughout the integration process.
+        :param disp_interval: Step-size at which the simulation progress will be displayed.
         :param decorator_kwargs: Optional keyword arguments to the `decorator` function.
         :return: Key-value pairs where the keys are the user-supplied keys of `outputs` and the values are state
             recordings in the form of `np.ndarray` objects.
@@ -102,7 +103,7 @@ class RNN:
                                   tuple(state_indices)
 
         # final simulation variable initializations
-        disp_interval = sampling_steps * 10
+        disp_interval = sampling_steps * 100 if disp_interval is None else int(np.round(disp_interval/dt))
         sample = 0
 
         # start simulation

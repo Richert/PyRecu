@@ -47,12 +47,12 @@ def ik_nodim_ata(y: np.ndarray, N: int, inp: np.ndarray, eta: np.ndarray, J: flo
     # calculate network input
     spikes = v >= v_spike
     rates = spikes / dt
-    s_in = np.mean(s)
+    s_in = J*np.mean(s)
 
     # calculate state vector updates
     dv = (v**2 - alpha*v + eta + inp + g*s_in*tau*(E_r - v) - u)/tau
     du = a*(b*v - u)
-    ds = J*rates - s/tau_s
+    ds = rates - s/tau_s
 
     # update state variables
     v_new = v + dt * dv
@@ -83,12 +83,12 @@ def ik(y: np.ndarray, N: int, inp: np.ndarray, W: np.ndarray, v_r: float, v_t: n
     # calculate network input
     spikes = v >= v_spike
     rates = spikes / dt
-    s_in = s @ W
+    s_in = J * s @ W
 
     # calculate state vector updates
     dv = (k*(v**2 - (v_r+v_t)*v + v_r*v_t) + inp + g*s_in*(E_r - v) + q*(np.mean(v)-v) - u)/C
     du = a*(b*(v-v_r) - u)
-    ds = J*rates - s/tau_s
+    ds = rates - s/tau_s
 
     # update state variables
     v_new = v + dt * dv
@@ -114,16 +114,17 @@ def ik_ata(y: np.ndarray, N: int, inp: np.ndarray, v_r: float, v_t: np.ndarray, 
      with heterogeneous background excitabilities."""
 
     # extract state variables from u
-    v, u, s = y[:N], y[N:2*N], y[2*N]
+    m = 2*N
+    v, u, s = y[:N], y[N:m], y[m]
 
     # calculate network input
     spikes = v >= v_spike
     rates = np.mean(spikes / dt)
 
     # calculate vector field of the system
-    dv = (k*(v**2 - (v_r+v_t)*v + v_r*v_t) + inp + g*s*(E_r - v) + q*(np.mean(v)-v) - u)/C
+    dv = (k*(v**2 - (v_r+v_t)*v + v_r*v_t) + inp + J*g*s*(E_r - v) + q*(np.mean(v)-v) - u)/C
     du = a*(b*(v-v_r) - u)
-    ds = J*rates - s/tau_s
+    ds = rates - s/tau_s
 
     # update state variables
     v_new = v + dt * dv
@@ -136,9 +137,9 @@ def ik_ata(y: np.ndarray, N: int, inp: np.ndarray, v_r: float, v_t: np.ndarray, 
 
     # store updated state variables
     y[:N] = v_new
-    y[N:2*N] = u_new
-    y[2*N] = s_new
-    y[2*N+1] = rates
+    y[N:m] = u_new
+    y[m] = s_new
+    y[m+1] = rates
 
     return y
 
