@@ -88,7 +88,7 @@ class RNN:
             in_args = (inp, W_in)
             get_input = self._project_input
 
-        # apply function decorators
+        # apply function decorator to all provided functions
         if decorator is None:
             decorator = lambda f, **kw: f
         ufunc = decorator(self.net_update, **decorator_kwargs)
@@ -96,9 +96,21 @@ class RNN:
         if get_input == self._get_input and 'parallel' in decorator_kwargs:
             decorator_kwargs.pop('parallel')
         infunc = decorator(get_input, **decorator_kwargs)
+        args = []
+        for arg in self.func_args:
+            if callable(arg):
+                args.append(decorator(arg, **decorator_kwargs))
+            else:
+                args.append(arg)
+        kwargs = {}
+        for key, arg in self.func_kwargs.items():
+            if callable(arg):
+                kwargs[key] = decorator(arg, **decorator_kwargs)
+            else:
+                kwargs[key] = arg
 
         # retrieve simulation variables from object and dicts
-        u, args, kwargs, N = self.u, self.func_args, self.func_kwargs, self.N
+        u, N = self.u, self.N
         recs, buffs, avgs, idxs = tuple(state_records), tuple(state_buffers), tuple(state_averaging), \
                                   tuple(state_indices)
 
