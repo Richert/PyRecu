@@ -1,2 +1,2 @@
 from .readout import ReadoutTraining
-from .rnn import RNN
+from .rnn import RNN, sequentiality, circular_connectivity

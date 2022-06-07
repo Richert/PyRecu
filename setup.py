@@ -4,7 +4,8 @@ PYRECU_TEAM = "Richard Gast"
 
 INSTALL_REQUIREMENTS = ['numpy',
                         'numba',
-                        'scikit-learn'
+                        'scikit-learn',
+                        'scipy'
                         ]
 
 CLASSIFIERS = ["Programming Language :: Python :: 3",

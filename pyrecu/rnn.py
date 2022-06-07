@@ -1,9 +1,16 @@
 import sys
+import time
 
+from scipy.stats import rv_discrete, bernoulli
+from scipy.signal import correlate, correlation_lags
 import numpy as np
-from numba import njit, prange, types, typed
+from numba import njit, prange
 import typing as tp
 from time import perf_counter
+
+
+# class for RNN simulations
+###########################
 
 class RNN:
 
@@ -186,3 +193,57 @@ class RNN:
         if store_results:
             sample += 1
         return sample
+
+
+# data analysis functions
+#########################
+
+
+def wrap(idxs: np.ndarray, N: int) -> np.ndarray:
+    idxs[idxs < 0] = N+idxs[idxs < 0]
+    idxs[idxs >= N] = idxs[idxs >= N] - N
+    return idxs
+
+
+def circular_connectivity(N: int, p: float, spatial_distribution: rv_discrete) -> np.ndarray:
+    C = np.zeros((N, N))
+    n_conns = int(N*p)
+    for n in range(N):
+        idxs = spatial_distribution.rvs(size=n_conns)
+        signs = 1 * (bernoulli.rvs(p=0.5, loc=0, size=n_conns) > 0)
+        signs[signs == 0] = -1
+        conns = wrap(n + idxs*signs, N)
+        C[n, conns] = 1.0/n_conns
+    return C
+
+
+def sequentiality(signals: np.ndarray, **kwargs):
+
+    # preparations
+    N = signals.shape[0]
+    m = signals.shape[1]
+    mode = kwargs.pop('mode', 'full')
+    if mode == 'valid':
+        raise ValueError('Please choose correlation mode to be either `full` or `same`, since `valid` will does not '
+                         'allow to evaluate the cross-correlation at multiple lags.')
+    lags = correlation_lags(m, m, mode=mode)
+    lags_pos = lags[lags > 0]
+    zero_lag = np.argwhere(lags == 0)[0]
+
+    # sum up cross-correlations over neurons and lags
+    sym = 0
+    asym = 0
+    print('Starting sequentiality approximation...')
+    t0 = time.perf_counter()
+    for n1 in range(N):
+        for n2 in range(N):
+            cc = correlate(signals[n1], signals[n2], mode=mode, **kwargs)
+            for l in lags_pos:
+                sym += (cc[zero_lag+l]-cc[zero_lag-l])**2
+                asym += (cc[zero_lag+l]+cc[zero_lag-l])**2
+        print(f'\rProgress: {n1*100/N} %', end='', file=sys.stdout)
+    t1 = time.perf_counter()
+    print(f'Sequentiality approximation finished after {t1-t0} s.')
+
+    # calculate sequentiality
+    return np.sqrt(sym/asym)
