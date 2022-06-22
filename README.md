@@ -17,6 +17,12 @@ It is very much a work-in-process kind of open-source project that everyone is w
 - train and test the readout layer of your RC workflow
 - use ridge regression and cross-validation features 
 
+### 3. util
+- collection of utility functions
+- create connectivity matrices with random sampling from spatial kernels
+- calculate the sequentiality of the network dynamics
+- calculate the functional modularity of the network from simulated RNN dynamics
+
 ## Installation
 
 To install PyRecu, clone this repository and run the following line from the directory in which the repository was cloned:
@@ -29,6 +35,7 @@ This will also install the requirements of the software listed below.
 - numpy
 - numba
 - scikit-learn
+- scipy
 
 ## Contact
 
