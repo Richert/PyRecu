@@ -1,128 +1,86 @@
 import numpy as np
-from numba import njit
+from typing import Union, Callable
 
 
-@njit
-def qif(u: np.ndarray, N: int, inp: np.ndarray, C: np.ndarray, etas: np.ndarray, J: float, tau: float, tau_s: float,
-        v_th: float, dt: float = 1e-4) -> np.ndarray:
+##########################
+# vector-field functions #
+##########################
+
+
+def qif(t: Union[int, float], y: np.ndarray, N: int, rates: np.ndarray, infunc: Callable, inargs: tuple,
+        etas: np.ndarray, tau: float, tau_s: float, J: float, W: np.ndarray) -> np.ndarray:
     """Calculates right-hand side update of a network of all-to-all coupled QIF neurons with heterogeneous
     background excitabilities."""
 
     # extract state variables from u
-    v, x = u[:N], u[N:2*N]
+    m = 2*N
+    v, s = y[:N], y[N:m]
 
-    # calculate network input
-    spikes = v > v_th
-    rates = spikes / dt
-    s = rates @ C
+    # retrieve extrinsic input at time t
+    inp = infunc(t, *inargs)
 
     # calculate state vector updates
-    v += dt * (v**2 + etas + inp + J*x*tau)/tau
-    x += dt * (s[0, :] - x/tau_s)
+    dy[:N] = (v**2 + etas + inp + s*tau)/tau
+    dy[N:m] = -s/tau_s + J*rates @ W
 
-    # reset membrane potential
-    v[spikes] = -v[spikes]
-
-    # store updated state variables
-    u[:N] = v
-    u[N:2*N] = x
-
-    # store network spiking
-    u[2*N:] = rates
-
-    return u
+    return dy
 
 
-@njit
-def qif_sfa(u: np.ndarray, N: int, inp: np.ndarray, C: np.ndarray, etas: np.ndarray, J: float, tau: float, alpha: float,
-            tau_a: float, tau_s: float, v_th: float, dt: float = 1e-4) -> np.ndarray:
+def qif_sfa(t: Union[int, float], y: np.ndarray, N: int, rates: np.ndarray, infunc: Callable, inargs: tuple,
+            etas: np.ndarray, tau: float, alpha: float, tau_a: float, tau_s: float, J: float, W: np.ndarray
+            ) -> np.ndarray:
     """Calculates right-hand side update of a network of all-to-all coupled QIF neurons with heterogeneous
     background excitabilities and mono-exponential spike-frequency-adaptation."""
 
     # extract state variables from u
-    v, a, x = u[:N], u[N:2*N], u[2*N:3*N]
+    m = 2*N
+    v, a, s = y[:N], u[N:m], u[m:m+N]
 
-    # calculate network input
-    spikes = v > v_th
-    rates = spikes / dt
-    s = rates @ C
+    # retrieve extrinsic input at time t
+    inp = infunc(t, *inargs)
 
     # calculate state vector updates
-    v += dt * (v**2 + etas + inp + J*x*tau - a)/tau
-    a += dt * (alpha*rates - a/tau_a)
-    x += dt * (s[0, :] - x/tau_s)
+    dy[:N] = (v**2 + etas + inp + x*tau - a)/tau
+    dy[N:m] = alpha*rates - a/tau_a
+    dy[m:m+N] = -s/tau_s + J*rates @ W
 
-    # reset membrane potential
-    v[spikes] = -v[spikes]
-
-    # store updated state variables
-    u[:N] = v
-    u[N:2*N] = a
-    u[2*N:3*N] = x
-
-    # store network spiking
-    u[3*N:] = rates
-
-    return u
+    return dy
 
 
-@njit
-def qif_ata(u: np.ndarray, N: int, inp: np.ndarray, etas: np.ndarray, J: float, tau: float, tau_s: float,
-            v_th: float, dt: float = 1e-4) -> np.ndarray:
+def qif_ata(t: Union[int, float], y: np.ndarray, N: int, rates: np.ndarray, infunc: Callable, inargs: tuple,
+            etas: np.ndarray, tau: float, tau_s: float, J: float) -> np.ndarray:
     """Calculates right-hand side update of a network of all-to-all coupled QIF neurons with heterogeneous
     background excitabilities."""
 
     # extract state variables from u
-    v, x = u[:N], u[N:2*N]
+    v, s = y[:N], y[N]
 
-    # calculate network input
-    spikes = v > v_th
-    rates = spikes / dt
+    # retrieve extrinsic input at time t
+    inp = infunc(t, *inargs)
 
     # calculate state vector updates
-    v += dt * (v**2 + etas + inp + J*x*tau)/tau
-    x += dt * (np.mean(rates) - x/tau_s)
+    dy[:N] = (v ** 2 + etas + inp + s * tau) / tau
+    dy[N] = -s / tau_s + J * np.mean(rates)
 
-    # reset membrane potential
-    v[spikes] = -v[spikes]
-
-    # store updated state variables
-    u[:N] = v
-    u[N:2*N] = x
-
-    # store network spiking
-    u[2*N:] = rates
-
-    return u
+    return dy
 
 
-@njit
-def qif_sfa_ata(u: np.ndarray, N: int, inp: np.ndarray, etas: np.ndarray, J: float, tau: float, alpha: float,
-                tau_a: float, tau_s: float, v_th: float, dt: float = 1e-4) -> np.ndarray:
+def qif_sfa_ata(t: Union[int, float], y: np.ndarray, N: int, rates: np.ndarray, infunc: Callable, inargs: tuple,
+                etas: np.ndarray, tau: float, alpha: float, tau_a: float, tau_s: float, J: float, W: np.ndarray
+                ) -> np.ndarray:
     """Calculates right-hand side update of a network of all-to-all coupled QIF neurons with heterogeneous
     background excitabilities and mono-exponential spike-frequency-adaptation."""
 
     # extract state variables from u
-    v, a, x = u[:N], u[N:2*N], u[2*N:3*N]
+    m = 2*N
+    v, a, s = y[:N], u[N:m], u[m]
 
-    # calculate network input
-    spikes = v > v_th
-    rates = spikes / dt
+    # retrieve extrinsic input at time t
+    inp = infunc(t, *inargs)
 
     # calculate state vector updates
-    v += dt * (v**2 + etas + inp + J*x*tau - a) / tau
-    a += dt * (alpha*rates - a / tau_a)
-    x += dt * (np.mean(rates) - x / tau_s)
+    dy[:N] = (v**2 + etas + inp + x*tau - a)/tau
+    dy[N:m] = alpha*rates - a/tau_a
+    dy[m] = -s/tau_s + J*np.mean(rates)
 
-    # reset membrane potential
-    v[spikes] = -v[spikes]
-
-    # store updated state variables
-    u[:N] = v
-    u[N:2*N] = a
-    u[2*N:3*N] = x
-
-    # store network spiking
-    u[3*N:] = rates
-
-    return u
+    return dy

@@ -1,8 +1,6 @@
 import sys
-import time
-from copy import deepcopy
-from scipy.stats import rv_discrete, bernoulli
-from scipy.signal import correlate, correlation_lags
+from scipy.integrate import solve_ivp
+from scipy.interpolate import interp1d
 import numpy as np
 from numba import njit, prange
 import typing as tp
@@ -14,29 +12,35 @@ from time import perf_counter
 
 class RNN:
 
-    def __init__(self, n_neurons: int, n_states: int, evolution_func: tp.Callable, *args, **kwargs):
+    def __init__(self, n_neurons: int, n_states: int, evolution_func: tp.Callable, evolution_args: tuple,
+                 callback_func: tp.Callable, callback_args: tuple, u_init: tp.Optional[np.ndarray] = None):
         """Create an instance of a recurrent neural network that provides methods for numerical simulations.
 
         :param n_neurons: Number of neurons in the network.
         :param n_states: Length of the state vector of the network.
         :param evolution_func: Function that performs a single numerical integration step of the network of the form
-            `f(u, n, I, *args, **kwargs)` with state vector `u`, number of neurons `n`, input `I` and
-            user-supplied arguments.
-        :param args: Positional arguments to be passed to the `evolution_func`.
-        :param kwargs: Keyword arguments to be passed to the `evolution_func`.
+            `f(t, u, du, n, g, g_args, *args)` with time or integration step `t`, state vector `u`,
+            number of neurons `n`, extrinsic input function `g` and user-supplied arguments `g_args` and `args`.
+        :param evolution_args: Positional arguments to be passed to the `evolution_func`.
+        :param callback_func: Function that can perform additional manipulations of the state vector `u` of the form
+            `f(u, n, *args)` with state vector `u`, number of neurons `n`, input `I` and
+            user-supplied arguments `args`.
+        :param callback_args: Keyword arguments to be passed to the `callback_func`.
         """
 
         self.N = n_neurons
-        self.u = kwargs.pop('u_init', np.zeros((n_states,)))
+        self.u = u_init if u_init is not None else np.zeros((n_states,))
         self.du = np.zeros_like(self.u)
-        self.t = kwargs.pop('t_init', 0.0)
+        self.t = 0.0
         self.net_update = evolution_func
-        self.func_kwargs = kwargs
-        self.func_args = args
+        self.func_args = evolution_args
+        self.callback = callback_func
+        self.callback_args = callback_args
 
     def run(self, T: float, dt: float, dts: float, outputs: dict, inp: np.ndarray = None, W_in: np.ndarray = None,
-            t_init: float = 0.0, cutoff: float = 0.0, verbose: bool = True, decorator: tp.Optional[tp.Callable] = njit,
-            disp_interval: float = None, **decorator_kwargs) -> dict:
+            t_init: float = 0.0, cutoff: float = 0.0, solver: str = 'euler', solver_kwargs: dict = None,
+            interp: str = 'linear', verbose: bool = True, decorator: tp.Optional[tp.Callable] = njit,
+            decorate_run_func: bool = True, disp_interval: float = None, **decorator_kwargs) -> dict:
         """Solve the initial value problem for the network.
 
         :param T: Upper time integration limit of the initial value problem.
@@ -51,14 +55,24 @@ class RNN:
         :param W_in: 2D array mapping input channels in `inp` to neurons in the network.
         :param t_init: Time at which to start solving the intial value problem.
         :param cutoff: Initial integration time that will be disregarded for all state recordings.
+        :param solver: Numerical solver method to use for integrating the system equations. Can be `euler`or `heun` for
+            fixed step-size solvers, or `scipy` for adaptive step-size solvers.
+        :param interp: Interpolation type used to interpolate extrinsic inputs when using the `scipy` solver methods.
+        :param solver_kwargs: Additional keyword arguments to be passed to `scipy.integrate.solve_ivp` if
+            `solver='scipy'`.
         :param verbose: If true, updates about the simulation status will be displayed.
         :param decorator: Decorator function that will be applied to the `evolution_func` and other `RNN` intrinsic
             functions that will be called multiple times throughout the integration process.
+        :param decorate_run_func: If True, decorator will be applied to run function as well. Else, it will only be
+        applied to internal functions.
         :param disp_interval: Step-size at which the simulation progress will be displayed.
         :param decorator_kwargs: Optional keyword arguments to the `decorator` function.
         :return: Key-value pairs where the keys are the user-supplied keys of `outputs` and the values are state
             recordings in the form of `np.ndarray` objects.
         """
+
+        if solver_kwargs is None:
+            solver_kwargs = dict()
 
         # initializations
         steps = int(np.round(T / dt))
@@ -66,7 +80,6 @@ class RNN:
         store_steps = int(np.round((T - cutoff) / dts))
         start_step = steps - store_steps * sampling_steps
         self.t += t_init
-        self.func_kwargs['dt'] = dt
 
         # define recording variables
         state_records, state_buffers, state_averaging, state_indices, keys = [], [], [], [], []
@@ -84,40 +97,31 @@ class RNN:
             state_indices.append(np.asarray(out["idx"]))
             keys.append(key)
 
-        # define input projection function
-        if inp is None:
-            in_args = ()
-            get_input = lambda s: 0.0
-        elif W_in is None:
-            in_args = (inp,)
-            get_input = self._get_input
+        # define integration function
+        if solver == 'euler':
+            make_step = self._euler_step
+        elif solver == 'heun':
+            make_step = self._heun_step
+        elif solver == 'midpoint':
+            make_step = self._midpoint_step
+        elif solver == 'ralston':
+            make_step = self._ralston_step
         else:
-            in_args = (inp, W_in)
-            get_input = self._project_input
+            raise ValueError('Invalid solver choice. See documentation of the `run` method for valid solver options.')
 
-        # apply function decorator to all provided functions
+        # define function generator
         if decorator is None:
             decorator = lambda f, **kw: f
-        ufunc = decorator(self.net_update, **decorator_kwargs)
-        recfunc = decorator(self._record_njit if decorator == njit else self._record, **decorator_kwargs)
-        if get_input == self._get_input and 'parallel' in decorator_kwargs:
-            decorator_kwargs.pop('parallel')
-        infunc = decorator(get_input, **decorator_kwargs)
-        args = []
-        for arg in self.func_args:
-            if callable(arg):
-                args.append(decorator(arg, **decorator_kwargs))
-            else:
-                args.append(arg)
-        kwargs = {}
-        for key, arg in self.func_kwargs.items():
-            if callable(arg):
-                kwargs[key] = decorator(arg, **decorator_kwargs)
-            else:
-                kwargs[key] = arg
 
-        # retrieve simulation variables from object and dicts
-        u, N = self.u, self.N
+        # apply function decorator to all relevant functions
+        ufunc = decorator(self.net_update, **decorator_kwargs) if decorate_run_func else self.net_update
+        recfunc = decorator(self._record_njit if decorator == njit else self._record, **decorator_kwargs)
+        callback = decorator(self.callback, **decorator_kwargs)
+        make_step = decorator(make_step, **decorator_kwargs)
+        infunc, inargs = self._get_input_func(inp, W_in, solver, T, t_init, steps, decorator, **decorator_kwargs)
+
+        # retrieve simulation variables from instance and dicts
+        u, N, fargs, cbargs = self.u, self.N, self.func_args, self.callback_args
         recs, buffs, avgs, idxs = tuple(state_records), tuple(state_buffers), tuple(state_averaging), \
                                   tuple(state_indices)
 
@@ -129,21 +133,9 @@ class RNN:
         if verbose:
             print('Starting simulation.')
         t0 = perf_counter()
-        for step in range(steps):
-
-            # call user-supplied update function
-            u = ufunc(u, N, infunc(step, *in_args), *args, **kwargs)
-
-            # record states
-            sample = recfunc(u, recs, buffs, avgs, idxs, sample, step, sampling_steps, start_step)
-
-            # print simulation progress
-            if verbose and step % disp_interval == 0:
-                print(f'\r    Simulation progress: {step*100/steps} %', end='', file=sys.stdout)
-
-        # final recording step
-        if sample < store_steps:
-            recfunc(u, recs, buffs, avgs, idxs, sample, sampling_steps, sampling_steps, 0)
+        self._integrate(u, N, dt, steps, ufunc, infunc, callback, recfunc, make_step, inargs, fargs, cbargs, recs,
+                        buffs, avgs, idxs, sample, sampling_steps, start_step, verbose, disp_interval, store_steps,
+                        **solver_kwargs)
 
         # summarize simulation process
         t1 = perf_counter()
@@ -153,6 +145,49 @@ class RNN:
 
         return {key: res for key, res in zip(keys, state_records)}
 
+    def _get_input_func(self, inp: np.ndarray, W_in: np.ndarray, solver: str, T: float, t0: float, steps: int,
+                        decorator: tp.Callable, **kwargs) -> tuple:
+
+        # define input function and function arguments
+        decorator_kwargs = kwargs.copy()
+        if inp is None:
+            in_args = ()
+            get_input = lambda s: 0.0
+        elif W_in is None:
+            decorator_kwargs.pop('parallel', None)
+            if solver in ['euler', 'heun']:
+                if solver == 'heun':
+                    inp_tmp = np.zeros((inp.shape[0] + 1,))
+                    inp_tmp[:-1] = inp
+                    inp_tmp[-1] = inp[-1]
+                    inp = inp_tmp
+                in_args = (inp,)
+                get_input = self._get_input
+            else:
+                time = np.linspace(t0, T, steps)
+                in_args = (time, inp)
+                get_input = self._get_continous_input
+        else:
+            if solver in ['euler', 'heun']:
+                if solver == 'heun':
+                    inp_tmp = np.zeros((inp.shape[0], inp.shape[1] + 1,))
+                    inp_tmp[:, :-1] = inp
+                    inp_tmp[:, -1] = inp[:, -1]
+                    inp = inp_tmp
+                in_args = (inp, W_in)
+                get_input = self._project_input
+            else:
+                time = np.linspace(t0, T, steps)
+                in_args = (time, inp, W_in)
+                get_input = self._project_continuous_input
+
+        # try applying the function decorator
+        try:
+            infunc = decorator(get_input, **decorator_kwargs)
+        except ValueError:
+            infunc = get_input
+        return infunc, in_args
+
     @staticmethod
     def _project_input(idx: int, inp: np.ndarray, w: np.ndarray):
         return w @ inp[:, idx]
@@ -160,6 +195,15 @@ class RNN:
     @staticmethod
     def _get_input(idx: int, inp: np.ndarray):
         return inp[idx]
+
+    @staticmethod
+    def _project_continuous_input(t: float, time: np.ndarray, inp: np.ndarray, w: np.ndarray):
+        inp_interp = np.asarray([np.interp(t, time, inp[:, idx]) for idx in range(inp.shape[1])])
+        w @ inp_interp
+
+    @staticmethod
+    def _get_continous_input(t: float, time: np.ndarray, inp: np.ndarray):
+        return np.interp(t, time, inp)
 
     @staticmethod
     def _record(u: np.ndarray, results: tuple, state_buffers: tuple, average: tuple, indices: tuple, sample: int,
@@ -194,161 +238,89 @@ class RNN:
             sample += 1
         return sample
 
+    @staticmethod
+    def _integrate(u: np.ndarray, N: int, dt: float, steps: int, ufunc: tp.Callable, infunc: tp.Callable,
+                   callback: tp. Callable, recfunc: tp.Callable, integrate: tp.Callable, inargs: tuple, fargs: tuple,
+                   cbargs: tuple, recs: tuple, buffs: tuple, avgs: tuple, idxs: tuple, sample: int, sampling_steps: int,
+                   start_step: int, verbose: bool, disp_interval: int, store_steps: int, **kwargs) -> None:
 
-# helper functions
-##################
+        for step in range(steps):
 
+            # integrate vector-field
+            u = integrate(u, N, dt, step, ufunc, infunc, callback, inargs, fargs, cbargs)
 
-def _get_unique_key(key: int, keys: list) -> int:
-    if key in keys:
-        return np.max(keys)+1
-    return key
+            # record states
+            sample = recfunc(u, recs, buffs, avgs, idxs, sample, step, sampling_steps, start_step)
 
+            # print simulation progress
+            if verbose and step % disp_interval == 0:
+                print(f'\r    Simulation progress: {step * 100 / steps} %', end='', file=sys.stdout)
 
-def _split_into_modules(A: np.ndarray, P: np.ndarray, modules: dict, m: int, iteration: int = 0, max_iter: int = 100,
-                        min_nodes: int = 2) -> dict:
-    modules_new = {}
-    B = A - P
-    for key, (nodes, Q_old) in deepcopy(modules).items():
+        # final recording step
+        if sample < store_steps:
+            recfunc(u, recs, buffs, avgs, idxs, sample, sampling_steps, sampling_steps, 0)
 
-        if Q_old > 0:
+    @staticmethod
+    def _euler_step(u: np.ndarray, N: int, dt: float, step: int, ufunc: tp.Callable, infunc: tp.Callable,
+                    cbfunc: tp.Callable, inargs: tuple, fargs: tuple, cbargs: tuple) -> np.ndarray:
 
-            # calculate difference matrix
-            B_tmp = B[nodes, :][:, nodes]
-            if iteration > 0:
-                for n in range(B_tmp.shape[0]):
-                    B_tmp[n, n] -= np.sum(B_tmp[n, :])
+        # spike detection and reset
+        u, spikes = cbfunc(u, N, *cbargs)
 
-            # eigenvalue decomposition of difference matrix
-            eigs, vectors = np.linalg.eig(B_tmp)
-            idx_max = np.argmax(eigs)
+        # call user-supplied vector-field function
+        du = ufunc(step, u, N, spikes/dt, infunc, inargs, *fargs)
 
-            # sort nodes into two modules
-            idx = vectors[:, idx_max] >= 0
-            s = np.zeros_like(nodes)
-            s[idx == True] = 1
-            s[idx == False] = -1
+        # integrate
+        u += dt * du
 
-            # calculate modularity
-            Q_new = s.T @ B_tmp @ s
+        return u
 
-            # decide whether to do another split or not
-            if Q_new > 0 and iteration < max_iter and np.sum(idx == True) >= min_nodes \
-                    and np.sum(idx == False) >= min_nodes:
+    @staticmethod
+    def _heun_step(u: np.ndarray, N: int, dt: float, step: int, ufunc: tp.Callable, infunc: tp.Callable,
+                   cbfunc: tp.Callable, inargs: tuple, fargs: tuple, cbargs: tuple) -> np.ndarray:
 
-                modules_new[_get_unique_key(key, list(modules_new))] = (nodes[np.argwhere(s > 0)[:, 0]], Q_new)
-                modules_new[_get_unique_key(key, list(modules_new))] = (nodes[np.argwhere(s < 0)[:, 0]], Q_new)
-                modules_new = _split_into_modules(A, P, modules_new, m, iteration + 1)
+        # spike detection and reset
+        u, spikes = cbfunc(u, N, *cbargs)
+        rates = spikes/dt
 
-            else:
-                modules_new[_get_unique_key(key, list(modules_new))] = (nodes, -1.0)
+        # first integration
+        du = ufunc(step, u, N, rates, infunc, inargs, *fargs)
+        u2 = u + dt*du
 
-        else:
-            modules_new[_get_unique_key(key, list(modules_new))] = (nodes, -1.0)
+        # second integration
+        du2 = ufunc(step+1, u2, N, rates, infunc, inargs, *fargs)
+        return u + dt*0.5*(du+du2)
 
-    return modules_new
+    @staticmethod
+    def _midpoint_step(u: np.ndarray, N: int, dt: float, step: int, ufunc: tp.Callable, infunc: tp.Callable,
+                       cbfunc: tp.Callable, inargs: tuple, fargs: tuple, cbargs: tuple) -> np.ndarray:
 
+        # spike detection and reset
+        u, spikes = cbfunc(u, N, *cbargs)
+        rates = spikes / dt
+        t = step*dt
 
-def _get_modules(A: np.ndarray, **kwargs) -> dict:
+        # intermediate integration
+        du = ufunc(t, u, N, rates, infunc, inargs, *fargs)
+        u2 = u + dt*0.5*du
 
-    # calculating the null matrix to compare against
-    P = np.zeros_like(A)
-    N = A.shape[0]
-    m = int(np.sum(np.tril(A) > 0))
-    for n1 in range(N):
-        for n2 in range(N):
-            k1 = np.sum(A[n1, :] > 0)
-            k2 = np.sum(A[n2, :] > 0)
-            P[n1, n2] = k1 * k2 / (2 * m)
+        # final integration
+        du2 = ufunc(t+0.5*dt, u2, N, rates, infunc, inargs, *fargs)
+        return u + dt*du2
 
-    # find modules
-    return _split_into_modules(A, P, {1: (np.arange(0, N), 1)}, m, 0, **kwargs)
+    @staticmethod
+    def _ralston_step(u: np.ndarray, N: int, dt: float, step: int, ufunc: tp.Callable, infunc: tp.Callable,
+                      cbfunc: tp.Callable, inargs: tuple, fargs: tuple, cbargs: tuple) -> np.ndarray:
 
+        # spike detection and reset
+        u, spikes = cbfunc(u, N, *cbargs)
+        rates = spikes / dt
+        t = step*dt
 
-def _wrap(idxs: np.ndarray, N: int) -> np.ndarray:
-    idxs[idxs < 0] = N+idxs[idxs < 0]
-    idxs[idxs >= N] = idxs[idxs >= N] - N
-    return idxs
+        # intermediate integration
+        du = ufunc(t, u, N, rates, infunc, inargs, *fargs)
+        u2 = u + dt*du*2/3
 
-
-# data analysis functions
-#########################
-
-
-def circular_connectivity(N: int, p: float, spatial_distribution: rv_discrete) -> np.ndarray:
-    C = np.zeros((N, N))
-    n_conns = int(N*p)
-    for n in range(N):
-        idxs = spatial_distribution.rvs(size=n_conns)
-        signs = 1 * (bernoulli.rvs(p=0.5, loc=0, size=n_conns) > 0)
-        signs[signs == 0] = -1
-        conns = _wrap(n + idxs*signs, N)
-        C[n, conns] = 1.0/n_conns
-    return C
-
-
-def sequentiality(signals: np.ndarray, **kwargs):
-
-    # preparations
-    N = signals.shape[0]
-    m = signals.shape[1]
-    mode = kwargs.pop('mode', 'full')
-    if mode == 'valid':
-        raise ValueError('Please choose correlation mode to be either `full` or `same`, since `valid` will does not '
-                         'allow to evaluate the cross-correlation at multiple lags.')
-    lags = correlation_lags(m, m, mode=mode)
-    lags_pos = lags[lags > 0]
-    zero_lag = np.argwhere(lags == 0)[0]
-
-    # sum up cross-correlations over neurons and lags
-    sym = 0
-    asym = 0
-    print('Starting sequentiality approximation...')
-    t0 = time.perf_counter()
-    for n1 in range(N):
-        for n2 in range(N):
-            cc = correlate(signals[n1], signals[n2], mode=mode, **kwargs)
-            for l in lags_pos:
-                sym += (cc[zero_lag+l]-cc[zero_lag-l])**2
-                asym += (cc[zero_lag+l]+cc[zero_lag-l])**2
-        print(f'\rProgress: {n1*100/N} %', end='', file=sys.stdout)
-    t1 = time.perf_counter()
-    print(f'Sequentiality approximation finished after {t1-t0} s.')
-
-    # calculate sequentiality
-    return np.sqrt(sym/asym)
-
-
-def modularity(signals: np.ndarray, threshold: float = 0.1, min_connections: int = 2, **kwargs) -> tuple:
-
-    # preparations
-    N = signals.shape[0]
-    mode = kwargs.pop('mode', 'full')
-    method = kwargs.pop('method', 'auto')
-
-    # calculate correlation matrix
-    C = np.zeros((N, N))
-    print('1. Calculating the correlation matrix...')
-    for n1 in range(N):
-        for n2 in range(N):
-            if n1 != n2:
-                C[n1, n2] = np.max(correlate(signals[n1], signals[n2], mode=mode, method=method))
-        print(f'\r      Progress: {n1 * 100 / N} %', end='', file=sys.stdout)
-    print('')
-
-    # preprocess correlation matrix
-    print('2. Turning correlation matrix into adjacency graph...')
-    idx = np.argwhere(C > threshold)
-    A = np.zeros_like(C)
-    A[idx[:, 0], idx[:, 1]] = 1.0
-    connected_nodes = np.sum(A, axis=1) >= min_connections
-    A1 = A[connected_nodes, :][:, connected_nodes]
-    print('        ...finished.')
-
-    # calculate modularity
-    print('3. Estimating the modularity of the adjacency graph...')
-    modules = _get_modules(A1, **kwargs)
-    print('        ...finished.')
-
-    print(fr'Result: Community finding algorithm revealed an optimal split into $m = {len(modules.keys())}$ modules.')
-    return modules, A1, np.argwhere(connected_nodes)
+        # final integration
+        du2 = ufunc(t + dt*2/3, u2, N, rates, infunc, inargs, *fargs)
+        return u + dt*(du*1/4 + du2*3/4)
