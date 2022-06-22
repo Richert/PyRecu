@@ -4,7 +4,7 @@ nb.set_num_threads(4)
 import numpy as np
 from pyrecu import RNN
 import matplotlib.pyplot as plt
-from pyrecu.neural_models import ik_ata, spike_reset
+from pyrecu.neural_models import ik_ata, ik_spike_reset
 plt.rcParams['backend'] = 'TkAgg'
 
 
@@ -41,8 +41,8 @@ inp = np.zeros((int(T/dt),)) + 80.0
 inp[int(300/dt):int(600/dt)] -= 500.0
 
 # collect parameters
-func_args = (v_r, spike_thresholds, k, E_r, C, g, tau_s, b, a, q, J)
-callback_args = (v_spike, v_reset, d)
+func_args = (v_r, spike_thresholds, k, E_r, C, g, tau_s, b, a, d, q, J)
+callback_args = (v_spike, v_reset)
 
 # run the model
 ###############
@@ -50,7 +50,7 @@ callback_args = (v_spike, v_reset, d)
 # initialize model
 u_init = np.zeros((2*N+1,))
 u_init[:N] -= 60.0
-model = RNN(N, 2*N+1, ik_ata, func_args, spike_reset, callback_args, u_init=u_init)
+model = RNN(N, 2*N+1, ik_ata, func_args, ik_spike_reset, callback_args, u_init=u_init)
 
 # define outputs
 outputs = {'s': {'idx': np.asarray([2*N]), 'avg': False}}

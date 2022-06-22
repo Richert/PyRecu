@@ -84,3 +84,25 @@ def qif_sfa_ata(t: Union[int, float], y: np.ndarray, N: int, rates: np.ndarray, 
     dy[m] = -s/tau_s + J*np.mean(rates)
 
     return dy
+
+
+#########################
+# spike reset functions #
+#########################
+
+
+def qif_spike_reset(y: np.ndarray, N: int, spike_threshold: float, spike_reset: float):
+
+    # extract relevant state variables
+    v = y[:N]
+
+    # find spikes
+    spikes = v >= spike_threshold
+
+    # apply discontinuities to state variables
+    v[spikes] = spike_reset
+
+    # overwrite state vector
+    y[:N] = v
+
+    return y, spikes
