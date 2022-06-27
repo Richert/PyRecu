@@ -2,7 +2,7 @@ import sys
 from scipy.integrate import solve_ivp
 from scipy.interpolate import interp1d
 import numpy as np
-from numba import njit, prange
+from numba import njit, prange, NumbaError
 import typing as tp
 from time import perf_counter
 
@@ -151,8 +151,9 @@ class RNN:
         # define input function and function arguments
         decorator_kwargs = kwargs.copy()
         if inp is None:
+            decorator_kwargs.pop('parallel', None)
             in_args = ()
-            get_input = lambda s: 0.0
+            infunc = lambda s: 0.0
         elif W_in is None:
             decorator_kwargs.pop('parallel', None)
             if solver in ['euler', 'heun']:
@@ -162,11 +163,11 @@ class RNN:
                     inp_tmp[-1] = inp[-1]
                     inp = inp_tmp
                 in_args = (inp,)
-                get_input = self._get_input
+                infunc = self._get_input
             else:
                 time = np.linspace(t0, T, steps)
                 in_args = (time, inp)
-                get_input = self._get_continous_input
+                infunc = self._get_continous_input
         else:
             if solver in ['euler', 'heun']:
                 if solver == 'heun':
@@ -175,17 +176,16 @@ class RNN:
                     inp_tmp[:, -1] = inp[:, -1]
                     inp = inp_tmp
                 in_args = (inp, W_in)
-                get_input = self._project_input
+                infunc = self._project_input
             else:
                 time = np.linspace(t0, T, steps)
                 in_args = (time, inp, W_in)
-                get_input = self._project_continuous_input
+                infunc = self._project_continuous_input
 
-        # try applying the function decorator
         try:
-            infunc = decorator(get_input, **decorator_kwargs)
-        except ValueError:
-            infunc = get_input
+            infunc = decorator(infunc, **decorator_kwargs)
+        except (ValueError, NumbaError):
+            pass
         return infunc, in_args
 
     @staticmethod

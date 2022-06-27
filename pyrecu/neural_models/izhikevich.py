@@ -12,9 +12,11 @@ def ik_nodim(t: Union[int, float], y: np.ndarray, N: int, rates: np.ndarray, inf
     """Calculates right-hand side update of a network of coupled Izhikevich neurons of the dimensionless form
      with heterogeneous background excitabilities."""
 
+    dy = np.zeros_like(y)
+
     # extract state variables from y
     m = 2*N
-    v, u, s = y[:N], y[N:m], y[n:]
+    v, u, s = y[:N], y[N:m], y[m:]
 
     # retrieve extrinsic input at time t
     inp = infunc(t, *inargs)
@@ -33,9 +35,11 @@ def ik_nodim_ata(t: Union[int, float], y: np.ndarray, N: int, rates: np.ndarray,
     """Calculates right-hand side update of a network of coupled Izhikevich neurons of the dimensionless form
      with heterogeneous background excitabilities."""
 
+    dy = np.zeros_like(y)
+
     # extract state variables from y
     m = 2*N
-    v, u, s = y[:N], y[N:m], y[n:]
+    v, u, s = y[:N], y[N:m], y[m]
 
     # retrieve extrinsic input at time t
     inp = infunc(t, *inargs)
@@ -43,7 +47,7 @@ def ik_nodim_ata(t: Union[int, float], y: np.ndarray, N: int, rates: np.ndarray,
     # calculate state vector updates
     dy[:N] = (v**2 + alpha*v + etas + inp + g*s*tau*(E_r - v) - u)/tau
     dy[N:m] = a*(b*v - u) + d*rates
-    dy[m:] = -s/tau_s + J*np.mean(rates)
+    dy[m] = -s/tau_s + J*np.mean(rates)
 
     return dy
 

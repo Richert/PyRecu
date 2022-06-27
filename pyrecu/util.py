@@ -82,8 +82,8 @@ def _wrap(idxs: np.ndarray, N: int) -> np.ndarray:
     return idxs
 
 
-# data analysis functions
-#########################
+# connectivity generation functions
+###################################
 
 
 def circular_connectivity(N: int, p: float, spatial_distribution: rv_discrete) -> np.ndarray:
@@ -96,6 +96,20 @@ def circular_connectivity(N: int, p: float, spatial_distribution: rv_discrete) -
         conns = _wrap(n + idxs*signs, N)
         C[n, conns] = 1.0/n_conns
     return C
+
+
+def random_connectivity(N: int, p: float, normalize: bool = True) -> np.ndarray:
+    C = np.zeros((N, N))
+    n_conns = int(N * p)
+    positions = np.arange(start=0, stop=N)
+    for n in range(N):
+        idxs = np.random.permutation(positions)[:n_conns]
+        C[n, idxs] = 1.0/n_conns if normalize else 1.0
+    return C
+    
+
+# data analysis functions
+#########################
 
 
 def sequentiality(signals: np.ndarray, **kwargs):
