@@ -1,7 +1,7 @@
 import time
 from copy import deepcopy
 from scipy.stats import rv_discrete, bernoulli
-from scipy.signal import correlation_lags
+from scipy.signal import correlation_lags, correlate
 import numpy as np
 import sys
 from numba import njit, prange
@@ -98,7 +98,7 @@ def _sequentiality_calculation(N: int, signals: np.ndarray, lags: np.ndarray, ze
     return sym, asym
 
 
-def _cross_corr(N: int, signals: np.ndarray, width: float = 0.2, corr: Callable = np.correlate) -> np.ndarray:
+def _cross_corr(N: int, signals: np.ndarray, width: float = 0.2, corr: Callable = np.correlate, **kwargs) -> np.ndarray:
     C = np.zeros((N, N))
     padding_length = int((N-1)*0.5*width)
     zero_padding = np.asarray([0.0 for _ in range(padding_length)])
@@ -107,7 +107,7 @@ def _cross_corr(N: int, signals: np.ndarray, width: float = 0.2, corr: Callable 
         s2_vec[padding_length:-padding_length] = signals[n2]
         for n1 in prange(N):
             if n1 != n2:
-                C[n1, n2] = np.max(corr(signals[n1], s2_vec))
+                C[n1, n2] = np.max(corr(signals[n1], s2_vec, **kwargs))
         #print("     " + str(int(n1 * 100 / N)))
     return C
 
@@ -122,6 +122,34 @@ def _corr(x: np.ndarray, y: np.ndarray) -> np.ndarray:
             c_i += x[k]*y[k+i]
         c[i] = c_i
     return c
+
+
+def _dft(x: np.ndarray):
+    N = x.shape[0]
+    dft = np.zeros(N, dtype=np.complex128)
+    for i in range(N):
+        series_element = 0
+        for n in range(N):
+            series_element += x[n] * np.exp(-2j * np.pi * i * n * (1 / N))
+        dft[i] = series_element
+    return dft
+
+
+def _idft(x: np.ndarray):
+    N = x.shape[0]
+    idft = np.zeros(N, dtype=np.complex128)
+    for i in range(N):
+        series_element = 0
+        for n in range(N):
+            series_element += x[n] * np.exp(2j * np.pi * i * n * (1 / N))
+        idft[i] = series_element / N
+    return idft
+
+
+def _corr_dft(x: np.ndarray, y: np.ndarray, dft: Callable = _dft, idft: Callable = _idft) -> np.ndarray:
+    x_dft = dft(x)
+    y_dft = dft(y)
+    return idft(x_dft * np.conjugate(y_dft))
 
 
 # connectivity generation functions
@@ -189,7 +217,8 @@ def sequentiality(signals: np.ndarray, decorator: Callable = njit, **kwargs) -> 
 
 
 def modularity(signals: np.ndarray, threshold: float = 0.1, min_connections: int = 2, min_nodes: int = 2,
-               max_iter: int = 100, cross_corr_width: float = 0.2, decorator: Callable = njit, **kwargs) -> tuple:
+               max_iter: int = 100, cross_corr_width: float = 0.2, cross_corr_method: str = 'direct',
+               decorator: Callable = njit, **kwargs) -> tuple:
     """Calculates the modularity of a system of interconnected units, by creating an adjacency matrix from the maximum
     cross-correlation between all units, thresholding it, and using the Newman (2006) community detection method.
 
@@ -203,6 +232,8 @@ def modularity(signals: np.ndarray, threshold: float = 0.1, min_connections: int
     :param cross_corr_width: Relative width of the zero-padding around the signals to be cross-correlated. Defined on
         the half-open interval `(0, 1]` (cross-correlation will be calculated for `2 * T * w` time lags, where `w` is
         the cross-correlation width).
+    :param cross_corr_method: Can be `direct` or `fft`, depending on whether the cross-correlation should be calculated
+        in time or frequency space.
     :param decorator: Decorator function applied to the cross-correlation calculation function.
     :param kwargs: Additional keyword arguments for the decorator function.
     :return: Tuple with 3 entries: (1) The dictionary containing the module structure, (2) the adjacency matrix used to
@@ -212,17 +243,27 @@ def modularity(signals: np.ndarray, threshold: float = 0.1, min_connections: int
 
     # preparations
     N = signals.shape[0]
+    ckwargs = {}
     if decorator is None:
-        c_func = np.correlate
+        if cross_corr_method is 'direct':
+            c_func = np.correlate
+        else:
+            c_func = correlate
+            ckwargs['method'] = cross_corr_method
         cc_func = _cross_corr
     else:
-        c_func = decorator(_corr, **kwargs)
+        if cross_corr_method is 'direct':
+            c_func = decorator(_corr, **kwargs)
+        else:
+            c_func = decorator(_corr_dft, **kwargs)
+            ckwargs['dft'] = decorator(_dft, **kwargs)
+            ckwargs['idft'] = decorator(_idft, **kwargs)
         cc_func = decorator(_cross_corr, **kwargs)
 
     # calculate correlation matrix
     print('1. Calculating the correlation matrix...')
     t0 = time.perf_counter()
-    C = cc_func(N, signals, width=cross_corr_width, corr=c_func)
+    C = cc_func(N, signals, width=cross_corr_width, corr=c_func, **ckwargs)
     t1 = time.perf_counter()
     print(f'        ...finished after {t1-t0} s.')
 
