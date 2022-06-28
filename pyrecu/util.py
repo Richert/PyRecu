@@ -1,9 +1,11 @@
 import time
 from copy import deepcopy
 from scipy.stats import rv_discrete, bernoulli
-from scipy.signal import correlate, correlation_lags
+from scipy.signal import correlation_lags
 import numpy as np
 import sys
+from numba import njit, prange
+from typing import Callable
 
 
 # helper functions
@@ -82,6 +84,46 @@ def _wrap(idxs: np.ndarray, N: int) -> np.ndarray:
     return idxs
 
 
+def _sequentiality_calculation(N: int, signals: np.ndarray, lags: np.ndarray, zero_lag: int,
+                               corr: Callable = np.correlate) -> tuple:
+    sym = 0
+    asym = 0
+    for n1 in range(N):
+        for n2 in range(N):
+            cc = corr(signals[n1], signals[n2])
+            for l in lags:
+                sym += (cc[zero_lag + l] - cc[zero_lag - l]) ** 2
+                asym += (cc[zero_lag + l] + cc[zero_lag - l]) ** 2
+        #print(f'\rProgress: {n1 * 100 / N} %')
+    return sym, asym
+
+
+def _cross_corr(N: int, signals: np.ndarray, width: float = 0.2, corr: Callable = np.correlate) -> np.ndarray:
+    C = np.zeros((N, N))
+    padding_length = int((N-1)*0.5*width)
+    zero_padding = np.asarray([0.0 for _ in range(padding_length)])
+    s2_vec = np.concatenate((zero_padding, signals[0], zero_padding))
+    for n2 in prange(N):
+        s2_vec[padding_length:-padding_length] = signals[n2]
+        for n1 in prange(N):
+            if n1 != n2:
+                C[n1, n2] = np.max(corr(signals[n1], s2_vec))
+        #print("     " + str(int(n1 * 100 / N)))
+    return C
+
+
+def _corr(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    n = x.shape[0]
+    m = y.shape[0]-n
+    c = np.zeros((m+1,))
+    for i in range(m+1):
+        c_i = 0
+        for k in range(n):
+            c_i += x[k]*y[k+i]
+        c[i] = c_i
+    return c
+
+
 # connectivity generation functions
 ###################################
 
@@ -106,37 +148,39 @@ def random_connectivity(N: int, p: float, normalize: bool = True) -> np.ndarray:
         idxs = np.random.permutation(positions)[:n_conns]
         C[n, idxs] = 1.0/n_conns if normalize else 1.0
     return C
-    
+
 
 # data analysis functions
 #########################
 
 
-def sequentiality(signals: np.ndarray, **kwargs):
+def sequentiality(signals: np.ndarray, decorator: Callable = njit, **kwargs) -> float:
+    """Estimates the sequentiality of the dynamics of a system using the method proposed by Bernacchia et al. (2022).
+
+    :param signals: `N x T` matrix containing the dynamics of `N` units sampled at `T` time steps.
+    :param  decorator: Decorator function that will be applied to the intrinsic function used for cross-correlation
+        calculation.
+    :param kwargs: Additional keyword arguments to be passed to the decorator function.
+    :return: Estimate of the sequentiality of the system dynamcis.
+    """
 
     # preparations
     N = signals.shape[0]
     m = signals.shape[1]
-    mode = kwargs.pop('mode', 'full')
-    if mode == 'valid':
-        raise ValueError('Please choose correlation mode to be either `full` or `same`, since `valid` will does not '
-                         'allow to evaluate the cross-correlation at multiple lags.')
-    lags = correlation_lags(m, m, mode=mode)
+    lags = correlation_lags(m, m, mode='valid')
     lags_pos = lags[lags > 0]
     zero_lag = np.argwhere(lags == 0)[0]
+    if decorator is None:
+        c_func = np.correlate
+        seq_func = _sequentiality_calculation
+    else:
+        c_func = decorator(_corr, **kwargs)
+        seq_func = decorator(_sequentiality_calculation, **kwargs)
 
     # sum up cross-correlations over neurons and lags
-    sym = 0
-    asym = 0
     print('Starting sequentiality approximation...')
     t0 = time.perf_counter()
-    for n1 in range(N):
-        for n2 in range(N):
-            cc = correlate(signals[n1], signals[n2], mode=mode, **kwargs)
-            for l in lags_pos:
-                sym += (cc[zero_lag+l]-cc[zero_lag-l])**2
-                asym += (cc[zero_lag+l]+cc[zero_lag-l])**2
-        print(f'\rProgress: {n1*100/N} %', end='', file=sys.stdout)
+    sym, asym = seq_func(N, signals, lags_pos, zero_lag, corr=c_func)
     t1 = time.perf_counter()
     print(f'Sequentiality approximation finished after {t1-t0} s.')
 
@@ -144,36 +188,63 @@ def sequentiality(signals: np.ndarray, **kwargs):
     return np.sqrt(sym/asym)
 
 
-def modularity(signals: np.ndarray, threshold: float = 0.1, min_connections: int = 2, **kwargs) -> tuple:
+def modularity(signals: np.ndarray, threshold: float = 0.1, min_connections: int = 2, min_nodes: int = 2,
+               max_iter: int = 100, cross_corr_width: float = 0.2, decorator: Callable = njit, **kwargs) -> tuple:
+    """Calculates the modularity of a system of interconnected units, by creating an adjacency matrix from the maximum
+    cross-correlation between all units, thresholding it, and using the Newman (2006) community detection method.
+
+    :param signals: N x T matrix with N units and T samples of the dynamics of the units.
+    :param threshold: Value in the half-open interval `(0,1]` that indicates which fraction of all pair-wise
+        correlations between the system units should be kept to create the adjacency matrix.
+    :param min_connections: Indicates how many incoming connections a unit should at least have to still be considered
+        part of the network.
+    :param min_nodes: Minimum number of nodes that a module should contain.
+    :param max_iter: Maximum number of successive splits into submodules.
+    :param cross_corr_width: Relative width of the zero-padding around the signals to be cross-correlated. Defined on
+        the half-open interval `(0, 1]` (cross-correlation will be calculated for `2 * T * w` time lags, where `w` is
+        the cross-correlation width).
+    :param decorator: Decorator function applied to the cross-correlation calculation function.
+    :param kwargs: Additional keyword arguments for the decorator function.
+    :return: Tuple with 3 entries: (1) The dictionary containing the module structure, (2) the adjacency matrix used to
+    identify the module structure, (3) the set of nodes that survived thresholding etc. and are part of the adjacency
+        matrix.
+    """
 
     # preparations
     N = signals.shape[0]
-    mode = kwargs.pop('mode', 'full')
-    method = kwargs.pop('method', 'auto')
+    if decorator is None:
+        c_func = np.correlate
+        cc_func = _cross_corr
+    else:
+        c_func = decorator(_corr, **kwargs)
+        cc_func = decorator(_cross_corr, **kwargs)
 
     # calculate correlation matrix
-    C = np.zeros((N, N))
     print('1. Calculating the correlation matrix...')
-    for n1 in range(N):
-        for n2 in range(N):
-            if n1 != n2:
-                C[n1, n2] = np.max(correlate(signals[n1], signals[n2], mode=mode, method=method))
-        print(f'\r      Progress: {n1 * 100 / N} %', end='', file=sys.stdout)
-    print('')
+    t0 = time.perf_counter()
+    C = cc_func(N, signals, width=cross_corr_width, corr=c_func)
+    t1 = time.perf_counter()
+    print(f'        ...finished after {t1-t0} s.')
 
     # preprocess correlation matrix
     print('2. Turning correlation matrix into adjacency graph...')
-    idx = np.argwhere(C > threshold)
+    t0 = time.perf_counter()
+    C_abs = np.abs(C)
+    theta = np.sort(C_abs, axis=None)[int(N*(1-threshold))]
+    idx = np.argwhere(C_abs > theta)
     A = np.zeros_like(C)
     A[idx[:, 0], idx[:, 1]] = 1.0
     connected_nodes = np.sum(A, axis=1) >= min_connections
     A1 = A[connected_nodes, :][:, connected_nodes]
-    print('        ...finished.')
+    t1 = time.perf_counter()
+    print(f'        ...finished after {t1-t0} s.')
 
     # calculate modularity
     print('3. Estimating the modularity of the adjacency graph...')
-    modules = _get_modules(A1, **kwargs)
-    print('        ...finished.')
+    t0 = time.perf_counter()
+    modules = _get_modules(A1, min_nodes=min_nodes, max_iter=max_iter)
+    t1 = time.perf_counter()
+    print(f'        ...finished after {t1-t0} s.')
 
     print(fr'Result: Community finding algorithm revealed an optimal split into $m = {len(modules.keys())}$ modules.')
     return modules, A1, np.argwhere(connected_nodes)
