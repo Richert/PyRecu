@@ -4,7 +4,8 @@ from scipy.stats import rv_discrete, bernoulli
 from scipy.signal import correlation_lags, correlate
 import numpy as np
 from numba import njit, prange, objmode
-from typing import Callable
+from typing import Callable, Union
+import sys
 
 
 # helper functions
@@ -123,16 +124,17 @@ def _cross_corr(N: int, signals: np.ndarray, mode: str = 'same', method: str = '
     C = np.zeros((N, N))
     for n2 in range(N):
         s2 = signals[n2]
-        for n1 in prange(N):
+        for n1 in range(N):
             if n1 != n2:
                 s1 = signals[n1]
                 C[n1, n2] = np.max(correlate(s1, s2, mode=mode, method=method))
+        print(f'\r      Progress: {n2 * 100 / N} %', end='', file=sys.stdout)
     return C
 
 
 def _cross_corr_njit(N: int, signals: np.ndarray, mode: str = 'same', method: str = 'direct'):
     C = np.zeros((N, N))
-    for n2 in range(N):
+    for n2 in prange(N):
         s2 = signals[n2]
         for n1 in prange(N):
             if n1 != n2:
@@ -226,7 +228,8 @@ def sequentiality(signals: np.ndarray, decorator: Callable = njit, **kwargs) -> 
 
 
 def modularity(signals: np.ndarray, threshold: float = 0.1, min_connections: int = 2, min_nodes: int = 2,
-               max_iter: int = 100, cross_corr_method: str = 'direct', decorator: Callable = njit, **kwargs) -> tuple:
+               max_iter: int = 100, cross_corr_method: str = 'direct', decorator: Union[Callable, None] = njit,
+               **kwargs) -> tuple:
     """Calculates the modularity of a system of interconnected units, by creating an adjacency matrix from the maximum
     cross-correlation between all units, thresholding it, and using the Newman (2006) community detection method.
 
@@ -261,13 +264,13 @@ def modularity(signals: np.ndarray, threshold: float = 0.1, min_connections: int
     t0 = time.perf_counter()
     C = cc_func(N, signals, method=cross_corr_method, mode='same')
     t1 = time.perf_counter()
-    print(f'        ...finished after {t1-t0} s.')
+    print(f'\n        ...finished after {t1-t0} s.')
 
     # preprocess correlation matrix
     print('2. Turning correlation matrix into adjacency graph...')
     t0 = time.perf_counter()
     C_abs = np.abs(C)
-    theta = np.sort(C_abs, axis=None)[int(N*(1-threshold))]
+    theta = np.sort(C_abs, axis=None)[int(N**2*(1-threshold))]
     idx = np.argwhere(C_abs > theta)
     A = np.zeros_like(C)
     A[idx[:, 0], idx[:, 1]] = 1.0

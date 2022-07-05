@@ -189,20 +189,20 @@ class RNN:
         return infunc, in_args
 
     @staticmethod
-    def _project_input(idx: int, inp: np.ndarray, w: np.ndarray):
+    def _project_input(idx: int, inp: np.ndarray, w: np.ndarray) -> np.ndarray:
         return w @ inp[:, idx]
 
     @staticmethod
-    def _get_input(idx: int, inp: np.ndarray):
+    def _get_input(idx: int, inp: np.ndarray) -> float:
         return inp[idx]
 
     @staticmethod
-    def _project_continuous_input(t: float, time: np.ndarray, inp: np.ndarray, w: np.ndarray):
-        inp_interp = np.asarray([np.interp(t, time, inp[:, idx]) for idx in range(inp.shape[1])])
-        w @ inp_interp
+    def _project_continuous_input(t: float, time: np.ndarray, inp: np.ndarray, w: np.ndarray) -> np.ndarray:
+        inp_interp = np.asarray([np.interp(t, time, inp[idx, :]) for idx in range(inp.shape[0])])
+        return w @ inp_interp
 
     @staticmethod
-    def _get_continous_input(t: float, time: np.ndarray, inp: np.ndarray):
+    def _get_continous_input(t: float, time: np.ndarray, inp: np.ndarray) -> float:
         return np.interp(t, time, inp)
 
     @staticmethod
