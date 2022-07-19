@@ -251,7 +251,6 @@ def modularity(signals: np.ndarray, threshold: float = 0.1, min_connections: int
 
     # preparations
     N = signals.shape[0]
-    ckwargs = {}
     if decorator is None:
         cc_func = _cross_corr
     elif decorator is njit:
@@ -287,7 +286,7 @@ def modularity(signals: np.ndarray, threshold: float = 0.1, min_connections: int
     print(f'        ...finished after {t1-t0} s.')
 
     print(fr'Result: Community finding algorithm revealed an optimal split into $m = {len(modules.keys())}$ modules.')
-    return modules, A1, np.argwhere(connected_nodes)
+    return modules, A1, np.squeeze(np.argwhere(connected_nodes))
 
 
 def sort_via_modules(A: np.ndarray, modules: dict) -> np.ndarray:
