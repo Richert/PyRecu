@@ -287,7 +287,7 @@ def modularity(signals: np.ndarray, threshold: float = 0.1, min_connections: int
     print(f'        ...finished after {t1-t0} s.')
 
     print(fr'Result: Community finding algorithm revealed an optimal split into $m = {len(modules.keys())}$ modules.')
-    return modules, A1, np.argwhere(connected_nodes)
+    return modules, A1, np.argwhere(connected_nodes).squeeze()
 
 
 def sort_via_modules(A: np.ndarray, modules: dict) -> np.ndarray:
