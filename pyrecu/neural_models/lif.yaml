@@ -1,0 +1,54 @@
+%YAML 1.2
+---
+
+# operator templates
+####################
+
+# lif operator
+lif_op:
+  base: OperatorTemplate
+  equations:
+    - "s' = -s/tau + s_in + I_ext"
+  variables:
+    s: output(0.0)
+    tau: 5.0
+    s_in : input(0.0)
+    I_ext: input(0.0)
+
+
+# lif operator 2
+lif_op2:
+  base: OperatorTemplate
+  equations:
+    - "v' = (v**2 + s_in + I_ext)/tau"
+    - "s' = -s/tau_s + r_in"
+  variables:
+    s: output(0.0)
+    v: variable(0.0)
+    tau: 10.0
+    tau_s: 5.0
+    s_in : input(0.0)
+    r_in: input(0.0)
+    I_ext: input(0.0)
+
+
+# node templates
+################
+
+# lif node
+lif_pop:
+  base: NodeTemplate
+  operators:
+    - lif_op2
+
+
+# circuit templates
+###################
+
+# lif circuit
+lif:
+  base: CircuitTemplate
+  nodes:
+    p: lif_pop
+  edges:
+    - [p/lif_op/s, p/lif_op/s_in, null, {weight: 5.0}]
