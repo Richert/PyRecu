@@ -13,7 +13,7 @@ class OutputLayer(Module):
 
         # initialize output weights
         if trainable:
-            self.layer = Linear(m, n, dtype=dtype)
+            self.layer = Linear(n, m, dtype=dtype)
         else:
             if weights is None:
                 weights = torch.randn(m, n, dtype=dtype)

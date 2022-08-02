@@ -80,7 +80,7 @@ class SRNNLayer(RNNLayer):
                  spike_var: torch.Tensor, spike_threshold: float = 1e2, spike_reset: float = -1e2, dt: float = 1e-3):
 
         super().__init__(rnn_func, rnn_args, input_ext, output)
-        input_net -= 2
+        input_net -= 3
         self._pos = input_net
         self._thresh = spike_threshold
         self._reset = spike_reset
@@ -122,4 +122,4 @@ class SRNNLayer(RNNLayer):
 
     def reset(self, spikes: torch.Tensor):
         self.fargs[self._pos][:] = 0.0
-        self.y[self._var][spikes] = self._reset
+        self.y[self._var[spikes]] = self._reset

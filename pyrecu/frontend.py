@@ -1,6 +1,6 @@
 import torch
 from torch.nn import Sequential
-from typing import Union
+from typing import Union, Iterator, Callable
 from .rnn_layer import RNNLayer, SRNNLayer
 from .input_layer import InputLayer, LinearStatic
 from .output_layer import OutputLayer
@@ -64,8 +64,9 @@ class ReservoirModel:
     def remove_output_layer(self):
         self.output_layer = None
 
-    def train(self, inputs: np.ndarray, targets: np.ndarray, optimizer: str, optimizer_kwargs: dict, loss: str,
-              loss_kwargs: dict, lr: float = 1e-3, device: str = 'cpu', **kwargs):
+    def train(self, inputs: np.ndarray, targets: np.ndarray, optimizer: str = 'sgd', optimizer_kwargs: dict = None,
+              loss: str = 'mse', loss_kwargs: dict = None, lr: float = 1e-3, device: str = 'cpu',
+              sampling_steps: int = 100, verbose: bool = True) -> list:
 
         # preparations
         ##############
@@ -77,67 +78,85 @@ class ReservoirModel:
             raise ValueError('Wrong dimensions of input and target output. Please make shure that `inputs` and '
                              '`targets` agree in the first dimension.')
 
-        # prepare model
+        # set up model
         if isinstance(self.input_layer.layer, LinearStatic):
             self.rnn_layer.detach()
         model = self._compile(device)
 
         # initialize optimizer
-        if optimizer == 'sgd':
-            opt = torch.optim.SGD
-        elif optimizer == 'adam':
-            opt = torch.optim.Adam
-        elif optimizer == 'adagrad':
-            opt = torch.optim.Adagrad
-        elif optimizer == 'lbfgs':
-            opt = torch.optim.LBFGS
-        elif optimizer == 'rmsprop':
-            opt = torch.optim.RMSprop
-        else:
-            raise ValueError('Invalid optimizer choice. Please see the documentation of the `ReservoirModel.run()` '
-                             'method for valid options.')
-        optimizer = opt(model.parameters(), lr=lr, **optimizer_kwargs)
+        optimizer = self._get_optimizer(optimizer, lr, model.parameters(), optimizer_kwargs=optimizer_kwargs)
 
         # initialize loss function
-        if loss == 'mse':
-            from torch.nn import MSELoss
-            l = MSELoss
-        elif loss == 'l1':
-            from torch.nn import L1Loss
-            l = L1Loss
-        elif loss == 'nll':
-            from torch.nn import NLLLoss
-            l = NLLLoss
-        elif loss == 'ce':
-            from torch.nn import CrossEntropyLoss
-            l = CrossEntropyLoss
-        elif loss == 'kld':
-            from torch.nn import KLDivLoss
-            l = KLDivLoss
-        else:
-            raise ValueError('Invalid loss function choice. Please see the documentation of the `ReservoirModel.run()` '
-                             'method for valid options.')
-        loss = l(**loss_kwargs)
+        loss = self._get_loss_function(loss, loss_kwargs=loss_kwargs)
 
         # optimization
         ##############
 
-        for step in range(inp_tensor.shape[0]):
+        loss_col = []
+        steps = inp_tensor.shape[0]
+        for step in range(steps):
 
             # forward pass
-            pred = model(inp_tensor[step, :])
+            prediction = model(inp_tensor[step, :])
 
             # loss calculation
-            error = loss(pred, target_tensor[step, :])
+            error = loss(prediction, target_tensor[step, :])
 
             # error backpropagation
             optimizer.zero_grad()
             error.backward()
             optimizer.step()
 
-    def test(self):
+            # results storage
+            if step % sampling_steps == 0:
+                if verbose:
+                    print(f'Progress: {step}/{steps} training steps finished.')
+                loss_col.append(error.item())
 
-        pass
+        return loss_col
+
+    def test(self, inputs: np.ndarray, targets: np.ndarray, loss: str = 'mse', loss_kwargs: dict = None,
+             device: str = 'cpu', sampling_steps: int = 100, verbose: bool = True) -> tuple:
+
+        # preparations
+        ##############
+
+        # transform inputs into tensors
+        inp_tensor = torch.tensor(inputs)
+        target_tensor = torch.tensor(targets)
+        if inp_tensor.shape[0] != target_tensor.shape[0]:
+            raise ValueError('Wrong dimensions of input and target output. Please make shure that `inputs` and '
+                             '`targets` agree in the first dimension.')
+
+        # set up model
+        model = self._compile(device)
+
+        # initialize loss function
+        loss = self._get_loss_function(loss, loss_kwargs=loss_kwargs)
+
+        # test loop
+        ###########
+
+        loss_total = 0.0
+        prediction_col = []
+        steps = inp_tensor.shape[0]
+        with torch.no_grad():
+            for step in range(steps):
+
+                # forward pass
+                prediction = model(inp_tensor[step, :])
+
+                # loss calculation
+                error = loss(prediction, target_tensor[step, :])
+                loss_total += error.item()
+
+                # results storage
+                if step % sampling_steps == 0:
+                    if verbose:
+                        print(f'Progress: {step}/{steps} test steps finished.')
+                    prediction_col.append(prediction.numpy())
+
+        return np.asarray(prediction_col), loss_total
 
     def run(self, inputs: np.ndarray, device: str = 'cpu', sampling_steps: int = 1):
 
@@ -164,3 +183,54 @@ class ReservoirModel:
         model = Sequential(*layers)
         model.to(device)
         return model
+
+    @staticmethod
+    def _get_optimizer(optimizer: str, lr: float, model_params: Iterator, optimizer_kwargs: dict = None
+                       ) -> torch.optim.Optimizer:
+
+        if optimizer_kwargs is None:
+            optimizer_kwargs = {}
+
+        if optimizer == 'sgd':
+            opt = torch.optim.SGD
+        elif optimizer == 'adam':
+            opt = torch.optim.Adam
+        elif optimizer == 'adagrad':
+            opt = torch.optim.Adagrad
+        elif optimizer == 'lbfgs':
+            opt = torch.optim.LBFGS
+        elif optimizer == 'rmsprop':
+            opt = torch.optim.RMSprop
+        else:
+            raise ValueError('Invalid optimizer choice. Please see the documentation of the `ReservoirModel.run()` '
+                             'method for valid options.')
+        return opt(model_params, lr=lr, **optimizer_kwargs)
+
+    @staticmethod
+    def _get_loss_function(loss: str, loss_kwargs: dict = None) -> Callable:
+
+        if loss_kwargs is None:
+            loss_kwargs = {}
+
+        if loss == 'mse':
+            from torch.nn import MSELoss
+            l = MSELoss
+        elif loss == 'l1':
+            from torch.nn import L1Loss
+            l = L1Loss
+        elif loss == 'nll':
+            from torch.nn import NLLLoss
+            l = NLLLoss
+        elif loss == 'ce':
+            from torch.nn import CrossEntropyLoss
+            l = CrossEntropyLoss
+        elif loss == 'kld':
+            from torch.nn import KLDivLoss
+            l = KLDivLoss
+        elif loss == 'hinge':
+            from torch.nn import HingeEmbeddingLoss
+            l = HingeEmbeddingLoss
+        else:
+            raise ValueError('Invalid loss function choice. Please see the documentation of the `ReservoirModel.run()` '
+                             'method for valid options.')
+        return l(**loss_kwargs)
