@@ -1,5 +1,5 @@
 import torch
-from torch.nn import Module, Linear, Tanh, Softmax, Softmin, Sigmoid, Identity
+from torch.nn import Module, Linear, Tanh, Softmax, Softmin, Sigmoid, Identity, Sequential
 from typing import Iterator
 from .input_layer import LinearStatic
 
@@ -13,29 +13,31 @@ class OutputLayer(Module):
 
         # initialize output weights
         if trainable:
-            self.layer = Linear(n, m, dtype=dtype)
+            layer = Linear(n, m, dtype=dtype)
         else:
             if weights is None:
                 weights = torch.randn(m, n, dtype=dtype)
             elif weights.dtype != dtype:
                 weights = torch.tensor(weights, dtype=dtype)
-            self.layer = LinearStatic(weights)
+            layer = LinearStatic(weights)
 
         # define output function
         if transform is None:
-            self.transform = Identity()
+            transform = Identity()
         elif transform == 'tanh':
-            self.transform = Tanh()
+            transform = Tanh()
         elif transform == 'softmax':
-            self.transform = Softmax()
+            transform = Softmax()
         elif transform == 'softmin':
-            self.transform = Softmin()
+            transform = Softmin()
         elif transform == 'sigmoid':
-            self.transform = Sigmoid()
+            transform = Sigmoid()
+
+        # define output layer
+        self.layer = Sequential(layer, transform)
 
     def forward(self, x):
-        projection = self.layer(x)
-        return self.transform(projection)
+        return self.layer(x)
 
     def parameters(self, recurse: bool = True) -> Iterator:
         return self.layer.parameters(recurse=recurse)

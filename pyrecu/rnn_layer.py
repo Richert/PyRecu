@@ -7,17 +7,17 @@ import numpy as np
 
 class RNNLayer(Module):
 
-    def __init__(self, rnn_func: Callable, rnn_args: tuple, input_ext: int, output: torch.Tensor, dt: float = 1e-3):
+    def __init__(self, rnn_func: Callable, rnn_args: tuple, input_ext: int, output: list, dt: float = 1e-3,
+                 dtype: torch.dtype = torch.float64):
 
         super().__init__()
-        input_ext -= 3
-        self.fargs = rnn_args[3:]
-        self.y = rnn_args[1]  # type: torch.Tensor
-        self.dy = rnn_args[2]  # type: torch.Tensor
-        self.output = output
+        self.y = torch.tensor(rnn_args[1], dtype=dtype)
+        self.dy = torch.tensor(rnn_args[2], dtype=dtype)
+        self.output = torch.tensor(output)
         self.dt = dt
-        self.layer = lambda x: rnn_func(0, self.y, self.dy,
-                                        *(self.fargs[:input_ext] + (x,) + self.fargs[input_ext + 1:]))
+        self.func = rnn_func
+        self.args = rnn_args[3:]
+        self._inp_ext = input_ext - 3
 
     @classmethod
     def from_yaml(cls, node: Union[str, NodeTemplate], weights: np.ndarray, source_var: str, target_var: str,
@@ -34,11 +34,12 @@ class RNNLayer(Module):
         input_idx = keys.index(input_var)
         out_indices, _ = template.get_variable_positions({'out': f"all/{output_var}"})
 
-        return cls(func, args, input_idx, torch.tensor([val[0] for val in out_indices['out'].values()]), dt=dt)
+        return cls(func, args, input_idx, [val[0] for val in out_indices['out'].values()], dt=dt)
 
     def forward(self, x):
-        self.dy = self.layer(x)
-        self.y += self.dt * self.dy
+        self.args[self._inp_ext][:] = x
+        self.dy = self.func(0, self.y, self.dy, *self.args)
+        self.y = self.y + self.dt * self.dy
         return self.y[self.output]
 
     def parameters(self, recurse: bool = True) -> Iterator:
@@ -47,10 +48,9 @@ class RNNLayer(Module):
 
     def detach(self):
 
-        self.y.detach()
-        self.dy.detach()
-        for arg in self.fargs:
-            arg.detach()
+        self.y = self.y.detach()
+        self.dy = self.dy.detach()
+        self.args = tuple([arg.detach() for arg in self.args])
 
     @classmethod
     def _circuit_from_yaml(cls, node: Union[str, NodeTemplate], weights: np.ndarray, source_var: str, target_var: str,
@@ -76,16 +76,15 @@ class RNNLayer(Module):
 
 class SRNNLayer(RNNLayer):
 
-    def __init__(self, rnn_func: Callable, rnn_args: tuple, input_ext: int, input_net: int, output: torch.Tensor,
-                 spike_var: torch.Tensor, spike_threshold: float = 1e2, spike_reset: float = -1e2, dt: float = 1e-3):
+    def __init__(self, rnn_func: Callable, rnn_args: tuple, input_ext: int, input_net: int, output: list,
+                 spike_var: list, spike_threshold: float = 1e2, spike_reset: float = -1e2, dt: float = 1e-3,
+                 dtype: torch.dtype = torch.float64):
 
-        super().__init__(rnn_func, rnn_args, input_ext, output)
-        input_net -= 3
-        self._pos = input_net
+        super().__init__(rnn_func, rnn_args, input_ext, output, dt=dt, dtype=dtype)
+        self._inp_net = input_net - 3
         self._thresh = spike_threshold
         self._reset = spike_reset
-        self._var = spike_var
-        self.dt = dt
+        self._var = torch.tensor(spike_var)
 
     @classmethod
     def from_yaml(cls, node: Union[str, NodeTemplate], weights: np.ndarray, source_var: str, target_var: str,
@@ -108,18 +107,19 @@ class SRNNLayer(RNNLayer):
         var_indices, _ = template.get_variable_positions({'out': f"all/{output_var}", 'spike': f"all/{spike_var}"})
 
         return cls(func, args, input_ext_idx, input_net_idx,
-                   torch.tensor([val[0] for val in var_indices['out'].values()]),
-                   torch.tensor([val[0] for val in var_indices['spike'].values()]),
+                   [val[0] for val in var_indices['out'].values()],
+                   [val[0] for val in var_indices['spike'].values()],
                    dt=dt, **kwargs_init)
 
     def forward(self, x):
         spikes = self.y[self._var] >= self._thresh
-        self.fargs[self._pos][spikes] = 1.0
-        self.dy = self.layer(x)
-        self.y += self.dt * self.dy
+        self.args[self._inp_net][spikes] = 1.0
+        self.args[self._inp_ext][:] = x
+        self.dy = self.func(0, self.y, self.dy, *self.args)
+        self.y = self.y + self.dt * self.dy
         self.reset(spikes)
         return self.y[self.output]
 
     def reset(self, spikes: torch.Tensor):
-        self.fargs[self._pos][:] = 0.0
         self.y[self._var[spikes]] = self._reset
+        self.args[self._inp_net][:] = 0.0

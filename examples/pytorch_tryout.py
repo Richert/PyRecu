@@ -1,7 +1,8 @@
-from torch import nn
+import numpy as np
 import torch
 import matplotlib.pyplot as plt
-import numpy as np
+from torch import nn
+from time import perf_counter
 
 
 class Reservoir(nn.Module):
@@ -35,7 +36,7 @@ class Reservoir(nn.Module):
 
 
 m = 2
-n = 200
+n = 100
 W = torch.rand(n, n)
 W /= torch.max(torch.real(torch.linalg.eigvals(W)))
 in_layer = nn.Linear(m, n, bias=False)
@@ -54,19 +55,29 @@ for step in range(int(steps/dur)):
         inputs[step*dur:(step+1)*dur, k] = torch.rand(1)*10.0
     targets[step*dur:(step+1)*dur, 0] = 1.0 if inputs[step*dur, 0] > inputs[step*dur, 1] else -1.0
 
-y = []
-s = []
-for step in range(steps):
+train_steps = 48000
+errors = []
+t0 = perf_counter()
+for step in range(train_steps):
     pred = model(inputs[step, :])
     mse = loss(pred, targets[step])
-    y.append(pred.detach().numpy())
-    s.append(np.mean(reservoir.s.numpy()))
     optimizer.zero_grad()
     mse.backward(retain_graph=True)
     optimizer.step()
+    errors.append(mse.item())
+t1 = perf_counter()
+print(f'Finished optimization after {t1-t0} s.')
+y = []
+s = []
+with torch.no_grad():
+    for step in range(steps-train_steps):
+        pred = model(inputs[train_steps+step, :])
+        y.append(pred.numpy())
+        s.append(np.mean(reservoir.s.numpy()))
 
-fig, ax = plt.subplots(nrows=2, figsize=(10, 6))
-ax[0].plot(targets[49000:])
-ax[0].plot(y[49000:])
-ax[1].plot(s[49000:])
+fig, ax = plt.subplots(nrows=3, figsize=(10, 8))
+ax[0].plot(targets[train_steps:])
+ax[0].plot(y)
+ax[1].plot(s)
+ax[2].plot(errors)
 plt.show()

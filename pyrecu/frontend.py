@@ -2,10 +2,11 @@ import torch
 from torch.nn import Sequential
 from typing import Union, Iterator, Callable
 from .rnn_layer import RNNLayer, SRNNLayer
-from .input_layer import InputLayer, LinearStatic
+from .input_layer import InputLayer
 from .output_layer import OutputLayer
 from pyrates import NodeTemplate
 import numpy as np
+from time import perf_counter
 
 
 class ReservoirModel:
@@ -65,8 +66,8 @@ class ReservoirModel:
         self.output_layer = None
 
     def train(self, inputs: np.ndarray, targets: np.ndarray, optimizer: str = 'sgd', optimizer_kwargs: dict = None,
-              loss: str = 'mse', loss_kwargs: dict = None, lr: float = 1e-3, device: str = 'cpu',
-              sampling_steps: int = 100, verbose: bool = True) -> list:
+              loss: str = 'mse', loss_kwargs: dict = None, lr: float = 1e-3, device: str = None,
+              sampling_steps: int = 100, verbose: bool = True, **kwargs) -> list:
 
         # preparations
         ##############
@@ -79,21 +80,28 @@ class ReservoirModel:
                              '`targets` agree in the first dimension.')
 
         # set up model
-        if isinstance(self.input_layer.layer, LinearStatic):
+        if not list(self.rnn_layer.parameters()):
             self.rnn_layer.detach()
         model = self._compile(device)
+
+        # initialize loss function
+        loss = self._get_loss_function(loss, loss_kwargs=loss_kwargs)
 
         # initialize optimizer
         optimizer = self._get_optimizer(optimizer, lr, model.parameters(), optimizer_kwargs=optimizer_kwargs)
 
-        # initialize loss function
-        loss = self._get_loss_function(loss, loss_kwargs=loss_kwargs)
+        # retrieve step-specific keyword arguments
+        step_kwargs = {}
+        for key in ['closure']:
+            if key in kwargs:
+                step_kwargs[key] = kwargs.pop(key)
 
         # optimization
         ##############
 
         loss_col = []
         steps = inp_tensor.shape[0]
+        t0 = perf_counter()
         for step in range(steps):
 
             # forward pass
@@ -104,8 +112,8 @@ class ReservoirModel:
 
             # error backpropagation
             optimizer.zero_grad()
-            error.backward()
-            optimizer.step()
+            error.backward(**kwargs)
+            optimizer.step(**step_kwargs)
 
             # results storage
             if step % sampling_steps == 0:
@@ -113,10 +121,12 @@ class ReservoirModel:
                     print(f'Progress: {step}/{steps} training steps finished.')
                 loss_col.append(error.item())
 
+        t1 = perf_counter()
+        print(f'Finished optimization after {t1-t0} s.')
         return loss_col
 
     def test(self, inputs: np.ndarray, targets: np.ndarray, loss: str = 'mse', loss_kwargs: dict = None,
-             device: str = 'cpu', sampling_steps: int = 100, verbose: bool = True) -> tuple:
+             device: str = None, sampling_steps: int = 100, verbose: bool = True) -> tuple:
 
         # preparations
         ##############
@@ -176,12 +186,14 @@ class ReservoirModel:
 
         return results
 
-    def _compile(self, device: str = 'cpu') -> Sequential:
-        in_layer = (self.input_layer,) if self.input_layer is not None else ()
-        out_layer = (self.output_layer,) if self.output_layer is not None else ()
-        layers = in_layer + (self.rnn_layer,) + out_layer
+    def _compile(self, device: Union[str, None]) -> Sequential:
+        in_layer = self._get_layer(self.input_layer)
+        out_layer = self._get_layer(self.output_layer)
+        rnn_layer = self._get_layer(self.rnn_layer)
+        layers = in_layer + rnn_layer + out_layer
         model = Sequential(*layers)
-        model.to(device)
+        if device is not None:
+            model.to(device)
         return model
 
     @staticmethod
@@ -234,3 +246,11 @@ class ReservoirModel:
             raise ValueError('Invalid loss function choice. Please see the documentation of the `ReservoirModel.run()` '
                              'method for valid options.')
         return l(**loss_kwargs)
+
+    @staticmethod
+    def _get_layer(layer) -> tuple:
+        if layer is None:
+            return tuple()
+        if hasattr(layer, 'layer'):
+            return tuple([layer.layer])
+        return tuple([layer])
