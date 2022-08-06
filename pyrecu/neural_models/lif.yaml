@@ -31,6 +31,21 @@ lif_op2:
     r_in: input(0.0)
     I_ext: input(0.0)
 
+# lif operator 3 (all-to-all coupling)
+lif_op3:
+  base: OperatorTemplate
+  equations:
+    - "v' = (v**2 + s_in + I_ext + eta)/tau"
+    - "s' = -s/tau_s + mean(r_in)"
+  variables:
+    s: output(0.0)
+    v: variable(0.0,1000)
+    tau: 1.0
+    tau_s: 0.5
+    eta: input(0.0,1000)
+    s_in : input(0.0)
+    r_in: input(0.0,1000)
+    I_ext: input(0.0)
 
 # node templates
 ################
@@ -39,7 +54,7 @@ lif_op2:
 lif_pop:
   base: NodeTemplate
   operators:
-    - lif_op2
+    - lif_op3
 
 
 # circuit templates
@@ -51,4 +66,4 @@ lif:
   nodes:
     p: lif_pop
   edges:
-    - [p/lif_op/s, p/lif_op/s_in, null, {weight: 5.0}]
+    - [p/lif_op/s, p/lif_op/s_in, null, {weight: 15.0}]

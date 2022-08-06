@@ -27,8 +27,8 @@ class RNNLayer(Module):
         dt = kwargs.pop('dt', 1e-3)
 
         # generate rnn template and function
-        func, args, keys, template = cls._circuit_from_yaml(node, weights, source_var, target_var, step_size=dt,
-                                                            **kwargs)
+        func, args, keys, template, state_var_indices = cls._circuit_from_yaml(node, weights, source_var, target_var,
+                                                                               step_size=dt, **kwargs)
 
         # get variable indices
         input_idx = keys.index(input_var)
@@ -68,10 +68,14 @@ class RNNLayer(Module):
         # add edges to network
         template.add_edges_from_matrix(source_var, target_var, nodes=list(nodes.keys()), weight=weights)
 
-        # generate rnn function
-        func, args, keys = template.get_run_func('rnn_layer', backend='torch', clear=False, **kwargs)
+        # add variable updates
+        if 'node_vars' in kwargs or 'edge_vars' in kwargs:
+            template.update_var(node_vars=kwargs.pop('node_vars', None), edge_vars=kwargs.pop('edge_vars', None))
 
-        return func, args, keys, template
+        # generate rnn function
+        func, args, keys, state_var_indices = template.get_run_func('rnn_layer', backend='torch', clear=False, **kwargs)
+
+        return func, args, keys, template, state_var_indices
 
 
 class SRNNLayer(RNNLayer):
@@ -98,18 +102,21 @@ class SRNNLayer(RNNLayer):
                 kwargs_init[key] = kwargs.pop(key)
 
         # generate rnn template and function
-        func, args, keys, template = cls._circuit_from_yaml(node, weights, source_var, target_var, step_size=dt,
-                                                            **kwargs)
+        func, args, keys, template, _ = cls._circuit_from_yaml(node, weights, source_var, target_var, step_size=dt,
+                                                               **kwargs)
 
         # get variable indices
         input_ext_idx = keys.index(input_var_ext)
         input_net_idx = keys.index(input_var_net)
         var_indices, _ = template.get_variable_positions({'out': f"all/{output_var}", 'spike': f"all/{spike_var}"})
+        try:
+            out_indices = [val[0] for val in var_indices['out'].values()]
+            spike_indices = [val[0] for val in var_indices['spike'].values()]
+        except AttributeError:
+            out_indices = var_indices['out']
+            spike_indices = var_indices['spike']
 
-        return cls(func, args, input_ext_idx, input_net_idx,
-                   [val[0] for val in var_indices['out'].values()],
-                   [val[0] for val in var_indices['spike'].values()],
-                   dt=dt, **kwargs_init)
+        return cls(func, args, input_ext_idx, input_net_idx, out_indices, spike_indices, dt=dt, **kwargs_init)
 
     def forward(self, x):
         spikes = self.y[self._var] >= self._thresh
