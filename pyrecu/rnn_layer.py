@@ -8,7 +8,7 @@ import numpy as np
 class RNNLayer(Module):
 
     def __init__(self, rnn_func: Callable, rnn_args: tuple, input_ext: int, output: list, dt: float = 1e-3,
-                 dtype: torch.dtype = torch.float64):
+                 dtype: torch.dtype = torch.float64, train_params: list = None, record_vars: dict = None):
 
         super().__init__()
         self.y = torch.tensor(rnn_args[1], dtype=dtype)
@@ -17,11 +17,13 @@ class RNNLayer(Module):
         self.dt = dt
         self.func = rnn_func
         self.args = rnn_args[3:]
+        self.train_params = [self.args[idx-3] for idx in train_params] if train_params else []
+        self._record_vars = record_vars
         self._inp_ext = input_ext - 3
 
     @classmethod
     def from_yaml(cls, node: Union[str, NodeTemplate], weights: np.ndarray, source_var: str, target_var: str,
-                  input_var: str, output_var: str, **kwargs):
+                  input_var: str, output_var: str, train_params: list = None, record_vars: list = None, **kwargs):
 
         # extract keyword arguments for initialization
         dt = kwargs.pop('dt', 1e-3)
@@ -32,9 +34,12 @@ class RNNLayer(Module):
 
         # get variable indices
         input_idx = keys.index(input_var)
-        out_indices, _ = template.get_variable_positions({'out': f"all/{output_var}"})
+        if train_params:
+            train_params = [keys.index(p) for p in train_params]
+        var_indices = cls._get_var_indices(template, output_var, recording_vars=record_vars)
 
-        return cls(func, args, input_idx, [val[0] for val in out_indices['out'].values()], dt=dt)
+        return cls(func, args, input_idx, var_indices.pop('out'), dt=dt, train_params=train_params,
+                   record_vars=out_indices)
 
     def forward(self, x):
         self.args[self._inp_ext][:] = x
@@ -42,8 +47,12 @@ class RNNLayer(Module):
         self.y = self.y + self.dt * self.dy
         return self.y[self.output]
 
+    def record(self, vars: list):
+        for v in vars:
+            yield self.y[self._record_vars[v]]
+
     def parameters(self, recurse: bool = True) -> Iterator:
-        for p in []:
+        for p in self.train_params:
             yield p
 
     def detach(self):
@@ -77,14 +86,30 @@ class RNNLayer(Module):
 
         return func, args, keys, template, state_var_indices
 
+    @staticmethod
+    def _get_var_indices(template: CircuitTemplate, out_var: str, spike_var: str = None, recording_vars: list = None):
+        var_dict = {'out': f"all/{out_var}"}
+        if spike_var is not None:
+            var_dict['spike'] = f"all/{spike_var}"
+        if recording_vars:
+            var_dict.update({key: f"all/{key}" for key in recording_vars})
+        var_indices, _ = template.get_variable_positions(var_dict)
+        results = {}
+        for var in list(var_indices.keys()):
+            try:
+                results[var] = [val[0] for val in var_indices.pop(var).values()]
+            except AttributeError:
+                results[var] = var_indices.pop(var)
+        return results
 
 class SRNNLayer(RNNLayer):
 
     def __init__(self, rnn_func: Callable, rnn_args: tuple, input_ext: int, input_net: int, output: list,
                  spike_var: list, spike_threshold: float = 1e2, spike_reset: float = -1e2, dt: float = 1e-3,
-                 dtype: torch.dtype = torch.float64):
+                 dtype: torch.dtype = torch.float64, train_params: list = None, record_vars: dict = None):
 
-        super().__init__(rnn_func, rnn_args, input_ext, output, dt=dt, dtype=dtype)
+        super().__init__(rnn_func, rnn_args, input_ext, output, dt=dt, dtype=dtype, train_params=train_params,
+                         record_vars=record_vars)
         self._inp_net = input_net - 3
         self._thresh = spike_threshold
         self._reset = spike_reset
@@ -92,7 +117,8 @@ class SRNNLayer(RNNLayer):
 
     @classmethod
     def from_yaml(cls, node: Union[str, NodeTemplate], weights: np.ndarray, source_var: str, target_var: str,
-                  input_var_ext: str, input_var_net: str, output_var: str, spike_var: str, **kwargs):
+                  input_var_ext: str, input_var_net: str, output_var: str, spike_var: str, train_params: list = None,
+                  record_vars: list = None, **kwargs):
 
         # extract keyword arguments for initialization
         dt = kwargs.pop('dt', 1e-3)
@@ -108,19 +134,16 @@ class SRNNLayer(RNNLayer):
         # get variable indices
         input_ext_idx = keys.index(input_var_ext)
         input_net_idx = keys.index(input_var_net)
-        var_indices, _ = template.get_variable_positions({'out': f"all/{output_var}", 'spike': f"all/{spike_var}"})
-        try:
-            out_indices = [val[0] for val in var_indices['out'].values()]
-            spike_indices = [val[0] for val in var_indices['spike'].values()]
-        except AttributeError:
-            out_indices = var_indices['out']
-            spike_indices = var_indices['spike']
+        if train_params:
+            train_params = [keys.index(p) for p in train_params]
+        var_indices = cls._get_var_indices(template, output_var, spike_var=spike_var, recording_vars=record_vars)
 
-        return cls(func, args, input_ext_idx, input_net_idx, out_indices, spike_indices, dt=dt, **kwargs_init)
+        return cls(func, args, input_ext_idx, input_net_idx, var_indices.pop('out'), var_indices.pop('spike'), dt=dt,
+                   train_params=train_params, record_vars=var_indices, **kwargs_init)
 
     def forward(self, x):
         spikes = self.y[self._var] >= self._thresh
-        self.args[self._inp_net][spikes] = 1.0
+        self.args[self._inp_net][spikes] = 1.0/self.dt
         self.args[self._inp_ext][:] = x
         self.dy = self.func(0, self.y, self.dy, *self.args)
         self.y = self.y + self.dt * self.dy

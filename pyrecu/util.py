@@ -12,6 +12,14 @@ import sys
 ##################
 
 
+def retrieve_from_dict(keys: list, data: dict) -> dict:
+    new_data = {}
+    for key in keys:
+        if key in data:
+            new_data[key] = data.pop(key)
+    return new_data
+
+
 def _get_unique_key(key: int, keys: list) -> int:
     if key in keys:
         return np.max(keys)+1

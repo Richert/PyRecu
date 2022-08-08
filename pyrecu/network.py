@@ -4,12 +4,14 @@ from typing import Union, Iterator, Callable
 from .rnn_layer import RNNLayer, SRNNLayer
 from .input_layer import InputLayer
 from .output_layer import OutputLayer
+from .util import retrieve_from_dict
+from .observer import Observer
 from pyrates import NodeTemplate
 import numpy as np
 from time import perf_counter
 
 
-class ReservoirModel:
+class Network:
 
     def __init__(self, rnn_layer: Union[RNNLayer, SRNNLayer]):
 
@@ -90,16 +92,18 @@ class ReservoirModel:
         # initialize optimizer
         optimizer = self._get_optimizer(optimizer, lr, model.parameters(), optimizer_kwargs=optimizer_kwargs)
 
-        # retrieve step-specific keyword arguments
-        step_kwargs = {}
-        for key in ['closure']:
-            if key in kwargs:
-                step_kwargs[key] = kwargs.pop(key)
+        # retrieve keyword arguments for optimization
+        step_kwargs = retrieve_from_dict(['closure'], kwargs)
+        error_kwargs = retrieve_from_dict(['retain_graph'], kwargs)
+
+        # initialize observer
+        obs_kwargs = retrieve_from_dict(['record_output', 'record_loss', 'record_vars'], kwargs)
+        obs = Observer(dt=self.rnn_layer.dt, **obs_kwargs)
+        rec_vars = obs.recorded_state_variables
 
         # optimization
         ##############
 
-        loss_col = []
         steps = inp_tensor.shape[0]
         t0 = perf_counter()
         for step in range(steps):
@@ -112,18 +116,18 @@ class ReservoirModel:
 
             # error backpropagation
             optimizer.zero_grad()
-            error.backward(**kwargs)
+            error.backward(**error_kwargs)
             optimizer.step(**step_kwargs)
 
             # results storage
             if step % sampling_steps == 0:
                 if verbose:
                     print(f'Progress: {step}/{steps} training steps finished.')
-                loss_col.append(error.item())
+                obs.record(prediction, error.item(), self.rnn_layer.record(rec_vars))
 
         t1 = perf_counter()
         print(f'Finished optimization after {t1-t0} s.')
-        return loss_col
+        return obs
 
     def test(self, inputs: np.ndarray, targets: np.ndarray, loss: str = 'mse', loss_kwargs: dict = None,
              device: str = None, sampling_steps: int = 100, verbose: bool = True) -> tuple:
@@ -214,7 +218,7 @@ class ReservoirModel:
         elif optimizer == 'rmsprop':
             opt = torch.optim.RMSprop
         else:
-            raise ValueError('Invalid optimizer choice. Please see the documentation of the `ReservoirModel.run()` '
+            raise ValueError('Invalid optimizer choice. Please see the documentation of the `Network.run()` '
                              'method for valid options.')
         return opt(model_params, lr=lr, **optimizer_kwargs)
 
@@ -243,7 +247,7 @@ class ReservoirModel:
             from torch.nn import HingeEmbeddingLoss
             l = HingeEmbeddingLoss
         else:
-            raise ValueError('Invalid loss function choice. Please see the documentation of the `ReservoirModel.run()` '
+            raise ValueError('Invalid loss function choice. Please see the documentation of the `Network.run()` '
                              'method for valid options.')
         return l(**loss_kwargs)
 

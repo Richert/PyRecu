@@ -35,16 +35,16 @@ lif_op2:
 lif_op3:
   base: OperatorTemplate
   equations:
-    - "v' = (v**2 + s_in + I_ext + eta)/tau"
+    - "v' = (v^2 + I_ext + eta)/tau + s_in"
     - "s' = -s/tau_s + mean(r_in)"
   variables:
     s: output(0.0)
-    v: variable(0.0,1000)
+    v: variable(0.0,10000)
     tau: 1.0
-    tau_s: 0.5
-    eta: input(0.0,1000)
+    tau_s: 1.0
+    eta: input(0.0,10000)
     s_in : input(0.0)
-    r_in: input(0.0,1000)
+    r_in: input(0.0,10000)
     I_ext: input(0.0)
 
 # node templates
@@ -54,7 +54,7 @@ lif_op3:
 lif_pop:
   base: NodeTemplate
   operators:
-    - lif_op3
+    - lif_op2
 
 
 # circuit templates
