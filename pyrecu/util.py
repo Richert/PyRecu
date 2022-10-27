@@ -120,32 +120,32 @@ def _idft(x: np.ndarray) -> np.ndarray:
     return idft
 
 
-def _cross_corr(N: int, signals: np.ndarray, mode: str = 'same', method: str = 'direct') -> np.ndarray:
+def cross_corr(N: int, signals: np.ndarray, mode: str = 'same', method: str = 'direct') -> np.ndarray:
     C = np.zeros((N, N))
     for n2 in range(N):
         s2 = signals[n2]
-        for n1 in range(N):
-            if n1 != n2:
-                s1 = signals[n1]
-                C[n1, n2] = np.max(correlate(s1, s2, mode=mode, method=method))
+        for n1 in range(n2+1, N):
+            s1 = signals[n1]
+            C[n1, n2] = np.max(correlate(s1, s2, mode=mode, method=method))
+            C[n2, n1] = C[n1, n2]
         print(f'\r      Progress: {n2 * 100 / N} %', end='', file=sys.stdout)
     return C
 
 
-def _cross_corr_njit(N: int, signals: np.ndarray, mode: str = 'same', method: str = 'direct'):
+def cross_corr_njit(N: int, signals: np.ndarray, mode: str = 'same', method: str = 'direct'):
     C = np.zeros((N, N))
     for n2 in prange(N):
         s2 = signals[n2]
-        for n1 in prange(N):
-            if n1 != n2:
-                s1 = signals[n1]
-                with objmode(c_tmp='double'):
-                    c_tmp = np.max(correlate(s1, s2, mode=mode, method=method))
-                C[n1, n2] = c_tmp
+        for n1 in prange(n2+1, N):
+            s1 = signals[n1]
+            with objmode(c_tmp='double'):
+                c_tmp = np.max(correlate(s1, s2, mode=mode, method=method))
+            C[n1, n2] = c_tmp
+            C[n2, n1] = c_tmp
     return C
 
 
-def _corr(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+def corr(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     n = x.shape[0]
     m = y.shape[0]-n
     c = np.zeros((m+1,))
@@ -157,7 +157,7 @@ def _corr(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     return c
 
 
-def _corr_dft(x: np.ndarray, y: np.ndarray, dft: Callable, idft: Callable) -> np.ndarray:
+def corr_dft(x: np.ndarray, y: np.ndarray, dft: Callable, idft: Callable) -> np.ndarray:
     x_dft = dft(x)
     y_dft = dft(y)
     return np.real(idft(x_dft * np.conjugate(y_dft)))
@@ -213,7 +213,7 @@ def sequentiality(signals: np.ndarray, decorator: Callable = njit, **kwargs) -> 
         c_func = np.correlate
         seq_func = _sequentiality_calculation
     else:
-        c_func = decorator(_corr, **kwargs)
+        c_func = decorator(corr, **kwargs)
         seq_func = decorator(_sequentiality_calculation, **kwargs)
 
     # sum up cross-correlations over neurons and lags
@@ -252,11 +252,11 @@ def modularity(signals: np.ndarray, threshold: float = 0.1, min_connections: int
     # preparations
     N = signals.shape[0]
     if decorator is None:
-        cc_func = _cross_corr
+        cc_func = cross_corr
     elif decorator is njit:
-        cc_func = decorator(_cross_corr_njit, **kwargs)
+        cc_func = decorator(cross_corr_njit, **kwargs)
     else:
-        cc_func = decorator(_cross_corr, **kwargs)
+        cc_func = decorator(cross_corr, **kwargs)
 
     # calculate correlation matrix
     print('1. Calculating the correlation matrix...')
