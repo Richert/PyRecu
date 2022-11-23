@@ -118,3 +118,22 @@ def ik_spike_reset(y: np.ndarray, N: int, spike_threshold: float, spike_reset: f
     y[:N] = v
 
     return y, spikes
+
+
+def ik_spike_reset2(y: np.ndarray, N: int, spike_threshold: float, spike_reset: float, d: float):
+
+    # extract relevant state variables
+    v, u = y[:N], y[N:2*N]
+
+    # find spikes
+    spikes = v >= spike_threshold
+
+    # apply discontinuities to state variables
+    v[spikes] = spike_reset
+    u[spikes] += d
+
+    # overwrite state vector
+    y[:N] = v
+    y[N:2*N] = u
+
+    return y, spikes

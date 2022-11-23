@@ -233,7 +233,7 @@ def modularity(signals: np.ndarray, threshold: float = 0.1, min_connections: int
     """Calculates the modularity of a system of interconnected units, by creating an adjacency matrix from the maximum
     cross-correlation between all units, thresholding it, and using the Newman (2006) community detection method.
 
-    :param signals: N x T matrix with N units and T samples of the dynamics of the units.
+    :param signals: N x T matrix with N units and T samples of the dynamics of the units. Or N x N correlation matrix.
     :param threshold: Value in the half-open interval `(0,1]` that indicates which fraction of all pair-wise
         correlations between the system units should be kept to create the adjacency matrix.
     :param min_connections: Indicates how many incoming connections a unit should at least have to still be considered
@@ -250,20 +250,30 @@ def modularity(signals: np.ndarray, threshold: float = 0.1, min_connections: int
     """
 
     # preparations
-    N = signals.shape[0]
-    if decorator is None:
-        cc_func = cross_corr
-    elif decorator is njit:
-        cc_func = decorator(cross_corr_njit, **kwargs)
-    else:
-        cc_func = decorator(cross_corr, **kwargs)
+    N, m = signals.shape[0], signals.shape[1]
 
-    # calculate correlation matrix
     print('1. Calculating the correlation matrix...')
-    t0 = time.perf_counter()
-    C = cc_func(N, signals, method=cross_corr_method, mode='same')
-    t1 = time.perf_counter()
-    print(f'\n        ...finished after {t1-t0} s.')
+    if N != m:
+        if decorator is None:
+            cc_func = cross_corr
+        elif decorator is njit:
+            cc_func = decorator(cross_corr_njit, **kwargs)
+        else:
+            cc_func = decorator(cross_corr, **kwargs)
+
+        # calculate correlation matrix
+        t0 = time.perf_counter()
+        if cross_corr_method == "cov":
+            C = signals @ signals.T
+        else:
+            C = cc_func(N, signals, method=cross_corr_method, mode='same')
+        C[np.eye(C.shape[0]) > 0] = 0.0
+        t1 = time.perf_counter()
+        print(f'\n        ...finished after {t1-t0} s.')
+
+    else:
+        C = signals
+        print('\n         ...skipping, since correlation matrix was provided.')
 
     # preprocess correlation matrix
     print('2. Turning correlation matrix into adjacency graph...')
